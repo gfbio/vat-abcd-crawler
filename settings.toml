@@ -1,0 +1,26 @@
+[general]
+log_file = "vat_abcd_crawler.log"
+
+[abcd]
+fields_file = "abcd-fields.json"
+
+[bms]
+monitor_url = "http://bms.gfbio.org/services/xml-archives/?provider=&dsa="
+
+[database]
+host = "localhost"
+port = 5432
+tls = true
+database = ""
+user = ""
+password = ""
+schema = ""
+dataset_table = ""
+temp_dataset_table = ""
+dataset_id_column = ""
+unit_table = ""
+temp_unit_table = ""
+unit_indexed_columns = [
+    "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal",
+    "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal",
+]

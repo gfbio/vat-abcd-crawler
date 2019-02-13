@@ -79,7 +79,7 @@ impl<'a> AbcdParser<'a> {
                 Ok(Event::End(ref e)) => {
                     const SEPARATOR_LENGTH: usize = 1;
 
-                    let tag: Vec<u8> = Self::strip_tag(e.name()).map(|b| *b).collect();
+                    let tag: Vec<u8> = Self::strip_tag(e.name()).cloned().collect();
                     let stripped_name_length = tag.len();
 
                     self.xml_tag_path.truncate(self.xml_tag_path.len() - stripped_name_length - SEPARATOR_LENGTH);

@@ -106,7 +106,7 @@ impl<'s> DatabaseSink<'s> {
         self.connection.execute(&format!(
             "create table {}_translation (name text not null, hash text not null);",
             self.database_settings.temp_dataset_table
-        ), &mut [])?;
+        ), &[])?;
 
         // fill table
         let statement = self.connection.prepare(&format!(
@@ -144,7 +144,7 @@ impl<'s> DatabaseSink<'s> {
 
         self.connection.execute(&format!(
             "create table {} ( {} );", self.database_settings.temp_unit_table, fields.join(",")
-        ), &mut [])?;
+        ), &[])?;
 
         Ok(())
     }
@@ -171,7 +171,7 @@ impl<'s> DatabaseSink<'s> {
 
         self.connection.execute(&format!(
             "create table {} ( {} );", self.database_settings.temp_dataset_table, fields.join(",")
-        ), &mut [])?;
+        ), &[])?;
 
         Ok(())
     }
@@ -180,13 +180,13 @@ impl<'s> DatabaseSink<'s> {
     fn drop_temporary_tables(&mut self) -> Result<(), Error> {
         self.connection.execute(&format!(
             "DROP TABLE IF EXISTS {};", &self.database_settings.temp_unit_table
-        ), &mut [])?;
+        ), &[])?;
         self.connection.execute(&format!(
             "DROP TABLE IF EXISTS {};", &self.database_settings.temp_dataset_table
-        ), &mut [])?;
+        ), &[])?;
         self.connection.execute(&format!(
             "DROP TABLE IF EXISTS {}_translation;", &self.database_settings.temp_dataset_table
-        ), &mut [])?;
+        ), &[])?;
 
         Ok(())
     }
@@ -218,15 +218,15 @@ impl<'s> DatabaseSink<'s> {
         // unit table
         transaction.execute(&format!(
             "DROP TABLE IF EXISTS {};", &self.database_settings.unit_table
-        ), &mut [])?;
+        ), &[])?;
         // dataset table
         transaction.execute(&format!(
             "DROP TABLE IF EXISTS {};", &self.database_settings.dataset_table
-        ), &mut [])?;
+        ), &[])?;
         // translation table
         transaction.execute(&format!(
             "DROP TABLE IF EXISTS {}_translation;", &self.database_settings.dataset_table
-        ), &mut [])?;
+        ), &[])?;
 
         Ok(())
     }
@@ -236,17 +236,17 @@ impl<'s> DatabaseSink<'s> {
         // unit table
         transaction.execute(&format!(
             "ALTER TABLE {} RENAME TO {};", &self.database_settings.temp_unit_table, &self.database_settings.unit_table
-        ), &mut [])?;
+        ), &[])?;
 
         // dataset table
         transaction.execute(&format!(
             "ALTER TABLE {} RENAME TO {};", &self.database_settings.temp_dataset_table, &self.database_settings.dataset_table
-        ), &mut [])?;
+        ), &[])?;
 
         // translation table
         transaction.execute(&format!(
             "ALTER TABLE {}_translation RENAME TO {}_translation;", &self.database_settings.temp_dataset_table, &self.database_settings.dataset_table
-        ), &mut [])?;
+        ), &[])?;
 
         Ok(())
     }
@@ -258,11 +258,11 @@ impl<'s> DatabaseSink<'s> {
             &self.database_settings.unit_table,
             &self.database_settings.temp_unit_table, &self.database_settings.dataset_id_column,
             &self.database_settings.unit_table, &self.database_settings.dataset_id_column
-        ), &mut [])?;
+        ), &[])?;
         transaction.execute(&format!(
             "ALTER INDEX {}_idx RENAME TO {}_idx;",
             &self.database_settings.temp_unit_table, &self.database_settings.unit_table
-        ), &mut [])?;
+        ), &[])?;
 
         Ok(())
     }
@@ -279,7 +279,7 @@ impl<'s> DatabaseSink<'s> {
             &self.database_settings.dataset_id_column
         );
         debug!("{}", &foreign_key_statement);
-        self.connection.execute(&foreign_key_statement, &mut [])?;
+        self.connection.execute(&foreign_key_statement, &[])?;
         let mut hasher = sha1::Sha1::new();
         let indexed_unit_column_names = self.database_settings.unit_indexed_columns.iter()
             .map(|field| {
@@ -296,26 +296,26 @@ impl<'s> DatabaseSink<'s> {
             indexed_unit_column_names.join("\", \"")
         );
         debug!("{}", &unit_index_statement);
-        self.connection.execute(&unit_index_statement, &mut [])?;
+        self.connection.execute(&unit_index_statement, &[])?;
         let cluster_statement = format!(
             "CLUSTER {}_idx ON {};",
             &self.database_settings.temp_unit_table,
             &self.database_settings.temp_unit_table
         );
         debug!("{}", &cluster_statement);
-        self.connection.execute(&cluster_statement, &mut [])?;
+        self.connection.execute(&cluster_statement, &[])?;
         let datasets_analyze_statement = format!(
             "VACUUM ANALYZE {};",
             &self.database_settings.temp_dataset_table
         );
         debug!("{}", &datasets_analyze_statement);
-        self.connection.execute(&datasets_analyze_statement, &mut [])?;
+        self.connection.execute(&datasets_analyze_statement, &[])?;
         let units_analyze_statement = format!(
             "VACUUM ANALYZE {};",
             &self.database_settings.temp_unit_table
         );
         debug!("{}", &units_analyze_statement);
-        self.connection.execute(&units_analyze_statement, &mut [])?;
+        self.connection.execute(&units_analyze_statement, &[])?;
 
         Ok(())
     }

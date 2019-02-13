@@ -155,5 +155,7 @@ fn initialize_logger(file_path: &Path, settings: &Settings) -> Result<(), Error>
         );
     }
 
-    Ok(CombinedLogger::init(loggers)?)
+    CombinedLogger::init(loggers)?;
+
+    Ok(())
 }

@@ -1,5 +1,10 @@
 [general]
 log_file = "vat_abcd_crawler.log"
+debug = false
+
+[debug]
+dataset_start = 0
+dataset_limit = 3
 
 [abcd]
 fields_file = "abcd-fields.json"

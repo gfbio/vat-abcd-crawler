@@ -2,6 +2,7 @@ use crate::abcd_fields::AbcdField;
 use crate::abcd_version::AbcdVersion;
 use failure::Error;
 use failure::Fail;
+//use log::debug;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashMap;
@@ -44,6 +45,8 @@ impl<'a> AbcdParser<'a> {
                 Ok(Event::Start(ref e)) => {
                     self.xml_tag_path.push(b'/');
                     self.xml_tag_path.extend(Self::strip_tag(e.name()));
+
+//                    debug!("XML START: {}", String::from_utf8_lossy(&self.xml_tag_path));
 
                     match self.xml_tag_path.as_slice() {
                         b"/DataSets" => {
@@ -110,7 +113,7 @@ impl<'a> AbcdParser<'a> {
                 }
                 Ok(Event::Eof) => break, // exits the loop when reaching end of file
                 Err(e) => panic!("Error at position {}: {:?}", xml_reader.buffer_position(), e),
-                _ => (), // Ignore the other events
+                _ => (), // ignore all other events
             }
 
             self.xml_buffer.clear();
@@ -121,7 +124,7 @@ impl<'a> AbcdParser<'a> {
         if let Some(dataset_data) = dataset_data {
             Ok(AbcdResult::new(dataset_data, units))
         } else {
-            Err(AbcdContainsNoDatasetMetadata{}.into())
+            Err(AbcdContainsNoDatasetMetadata {}.into())
         }
     }
 
@@ -140,9 +143,10 @@ impl<'a> AbcdParser<'a> {
     }
 
     fn strip_tag(tag: &[u8]) -> impl Iterator<Item=&u8> {
+        let has_colon = tag.iter().any(|&b| b == b':');
         tag.iter()
-            .skip_while(|&&b| b != b':')
-            .skip(1) // the ':' itself
+            .skip_while(move |&&b| has_colon && b != b':')
+            .skip(if has_colon { 1 } else { 0 }) // the ':' itself
     }
 }
 

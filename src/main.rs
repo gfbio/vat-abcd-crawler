@@ -20,9 +20,6 @@ use simplelog::{CombinedLogger, SharedLogger, TermLogger, WriteLogger};
 use std::fs::File;
 use std::path::Path;
 
-// TODO: refactor
-const DEBUG_LIMIT_DATASETS: usize = std::u32::MAX as usize; // Some(3);
-
 fn main() {
     let matches = App::new("VAT ABCD Crawler")
         .version(crate_version!())
@@ -43,7 +40,7 @@ fn main() {
     );
     let settings = Settings::new(settings_path).expect("Unable to use config file.");
 
-    initialize_logger(Path::new(&settings.general.log_file)).expect("Unable to initialize logger.");
+    initialize_logger(Path::new(&settings.general.log_file), &settings).expect("Unable to initialize logger.");
 
     let temp_dir = match tempfile::tempdir() {
         Ok(dir) => dir,
@@ -79,8 +76,9 @@ fn main() {
 
     let mut abcd_parser = AbcdParser::new(&abcd_fields);
 
-    // TODO: refactor debug mode (take)
-    for path_result in download_datasets(temp_dir.path(), &bms_datasets).take(DEBUG_LIMIT_DATASETS) {
+    for path_result in download_datasets(temp_dir.path(), &bms_datasets)
+        .skip(settings.debug.dataset_start.filter(|_| settings.general.debug).unwrap_or(std::usize::MIN))
+        .take(settings.debug.dataset_limit.filter(|_| settings.general.debug).unwrap_or(std::usize::MAX)) {
         let download = match path_result {
             Ok(d) => d,
             Err(e) => {
@@ -92,11 +90,9 @@ fn main() {
         info!("Processing `{}` @ `{}` ({})",
               download.dataset.dataset,
               download.dataset.provider_datacenter,
-              download.dataset.xml_archives.iter()
-                  .filter(|archive| archive.latest)
-                  .next()
-                  .map(|archive| archive.xml_archive.as_ref())
-                  .unwrap_or_else(|| "-")
+              download.dataset.get_latest_archive()
+                  .map(|archive| archive.xml_archive.as_str())
+                  .unwrap_or_else(|_| "-")
         );
 
         for xml_bytes_result in ArchiveReader::from_path(&download.path).unwrap().bytes_iter() {
@@ -140,16 +136,22 @@ fn main() {
     };
 }
 
-fn initialize_logger(file_path: &Path) -> Result<(), Error> {
+fn initialize_logger(file_path: &Path, settings: &Settings) -> Result<(), Error> {
     let mut loggers: Vec<Box<SharedLogger>> = Vec::new();
 
-    if let Some(term_logger) = TermLogger::new(simplelog::LevelFilter::Info, simplelog::Config::default()) {
+    let log_level = if settings.general.debug {
+        simplelog::LevelFilter::Debug
+    } else {
+        simplelog::LevelFilter::Info
+    };
+
+    if let Some(term_logger) = TermLogger::new(log_level, simplelog::Config::default()) {
         loggers.push(term_logger);
     }
 
     if let Ok(file) = File::create(file_path) {
         loggers.push(
-            WriteLogger::new(simplelog::LevelFilter::Info, simplelog::Config::default(), file)
+            WriteLogger::new(log_level, simplelog::Config::default(), file)
         );
     }
 

@@ -24,6 +24,14 @@ pub struct BmsXmlArchive {
     pub latest: bool,
 }
 
+impl BmsDataset {
+    pub fn get_latest_archive(&self) -> Result<&BmsXmlArchive, DatasetContainsNoFileError> {
+        self.xml_archives.iter()
+            .find(|archive| archive.latest) // get latest archive version
+            .ok_or_else(|| DatasetContainsNoFileError::new(&self.dataset))
+    }
+}
+
 /// This function downloads a list of dataset information from the BMS.
 pub fn load_bms_datasets(url: &str) -> Result<Vec<BmsDataset>, Error> {
     Ok(
@@ -60,7 +68,7 @@ pub fn download_datasets<'d, 't>(temp_dir: &'t Path, datasets: &'d [BmsDataset])
 /// This error occurs when it is not possible to download a dataset archive.
 #[derive(Debug, Fail)]
 #[fail(display = "Dataset {} contains no file to download.", dataset)]
-struct DatasetContainsNoFileError {
+pub struct DatasetContainsNoFileError {
     dataset: String,
 }
 
@@ -75,10 +83,7 @@ impl DatasetContainsNoFileError {
 
 /// Download a dataset (the latest) into the given file path.
 pub fn download_dataset(download_file_path: &Path, dataset: &BmsDataset) -> Result<(), Error> {
-    let url: &str = dataset.xml_archives.iter()
-        .find(|archive| archive.latest) // only download latest archive version
-        .map(|archive| archive.xml_archive.as_ref())
-        .ok_or_else(|| DatasetContainsNoFileError::new(&dataset.dataset))?;
+    let url = dataset.get_latest_archive()?.xml_archive.as_str();
 
     let mut response = reqwest::get(url)?;
 

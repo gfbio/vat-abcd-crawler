@@ -7,6 +7,7 @@ use std::path::Path;
 #[derive(Debug, Deserialize)]
 pub struct General {
     pub log_file: String,
+    pub debug: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,12 +37,19 @@ pub struct Database {
     pub unit_indexed_columns: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct Debug {
+    pub dataset_start: Option<usize>,
+    pub dataset_limit: Option<usize>,
+}
+
 /// This struct stores the program settings.
 #[derive(Debug, Deserialize)]
 pub struct Settings {
     pub abcd: Abcd,
     pub bms: Bms,
     pub database: Database,
+    pub debug: Debug,
     pub general: General,
 }
 

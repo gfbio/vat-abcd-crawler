@@ -1,10 +1,9 @@
 //use postgres::types::{IsNull, Type, ToSql};
 use crate::abcd_fields::AbcdField;
 use crate::abcd_parser::AbcdResult;
-use crate::abcd_parser::NumericMap;
-use crate::abcd_parser::TextualMap;
+use crate::abcd_parser::ValueMap;
 use crate::settings;
-use failure::Error;
+use failure::{Error, Fail};
 use log::debug;
 use postgres::params::ConnectParams;
 use postgres::params::Host;
@@ -13,86 +12,62 @@ use postgres::{Connection, TlsMode};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use csv::WriterBuilder;
+use postgres::transaction::Transaction;
 
-/// A postgresql database DAO for storing datasets.
+const POSTGRES_CSV_CONFIGURATION: &str = "DELIMITER '\t', NULL '', QUOTE '\"', ESCAPE '\"', FORMAT CSV";
+
+/// A PostgreSQL database DAO for storing datasets.
 pub struct DatabaseSink<'s> {
     connection: Connection,
     database_settings: &'s settings::Database,
-    dataset_numeric_fields: Vec<String>,
-    dataset_numeric_fields_hash: Vec<String>,
-    dataset_textual_fields: Vec<String>,
-    dataset_textual_fields_hash: Vec<String>,
-    inserted_datasets: HashMap<String, u32>,
+    dataset_fields: Vec<String>,
+    dataset_fields_hash: Vec<String>,
+    datasets_to_ids: HashMap<String, u32>,
     next_dataset_id: u32,
-    unit_numeric_fields: Vec<String>,
-    unit_numeric_fields_hash: Vec<String>,
-    unit_textual_fields: Vec<String>,
-    unit_textual_fields_hash: Vec<String>,
+    unit_fields: Vec<String>,
+    unit_fields_hash: Vec<String>,
 }
 
 impl<'s> DatabaseSink<'s> {
-    pub fn new(database_settings: &'s settings::Database, abcd_fields: &HashMap<Vec<u8>, AbcdField>) -> Result<Self, Error> {
+    /// Create a new PostgreSQL database sink (DAO).
+    pub fn new(database_settings: &'s settings::Database,
+               abcd_fields: &HashMap<Vec<u8>, AbcdField>) -> Result<Self, Error> {
+        // create database connection params from the settings, including optional tls
         let negotiator = if database_settings.tls {
             Some(OpenSsl::new()?)
         } else {
             None
         };
-        let params = ConnectParams::builder()
+        let connection_params = ConnectParams::builder()
             .user(&database_settings.user, Some(&database_settings.password))
             .port(database_settings.port)
             .database(&database_settings.database)
             .build(Host::Tcp(database_settings.host.clone()));
 
+        // fill lists of dataset and unit fields and give them a fixed order for the database inserts
+        let mut dataset_fields = Vec::new();
+        let mut dataset_fields_hash = Vec::new();
+        let mut unit_fields = Vec::new();
+        let mut unit_fields_hash = Vec::new();
         let mut hasher = sha1::Sha1::new();
-
-        let dataset_numeric_fields = abcd_fields.values()
-            .filter(|field| field.global_field && field.numeric)
-            .map(|field| field.field.clone())
-            .collect::<Vec<String>>();
-        let dataset_numeric_fields_hash = dataset_numeric_fields.iter()
-            .map(|field| {
+        for field in abcd_fields.values() {
+            let hash = {
                 hasher.reset();
-                hasher.update(field.as_bytes());
+                hasher.update(field.field.as_bytes());
                 hasher.digest().to_string()
-            })
-            .collect::<Vec<String>>();
-        let dataset_textual_fields = abcd_fields.values()
-            .filter(|field| field.global_field && !field.numeric)
-            .map(|field| field.field.clone())
-            .collect::<Vec<String>>();
-        let dataset_textual_fields_hash = dataset_textual_fields.iter()
-            .map(|field| {
-                hasher.reset();
-                hasher.update(field.as_bytes());
-                hasher.digest().to_string()
-            })
-            .collect::<Vec<String>>();
-        let unit_numeric_fields = abcd_fields.values()
-            .filter(|field| !field.global_field && field.numeric)
-            .map(|field| field.field.clone())
-            .collect::<Vec<String>>();
-        let unit_numeric_fields_hash = unit_numeric_fields.iter()
-            .map(|field| {
-                hasher.reset();
-                hasher.update(field.as_bytes());
-                hasher.digest().to_string()
-            })
-            .collect::<Vec<String>>();
-        let unit_textual_fields = abcd_fields.values()
-            .filter(|field| !field.global_field && !field.numeric)
-            .map(|field| field.field.clone())
-            .collect::<Vec<String>>();
-        let unit_textual_fields_hash = unit_textual_fields.iter()
-            .map(|field| {
-                hasher.reset();
-                hasher.update(field.as_bytes());
-                hasher.digest().to_string()
-            })
-            .collect::<Vec<String>>();
+            };
+            if field.global_field {
+                dataset_fields.push(field.field.clone());
+                dataset_fields_hash.push(hash);
+            } else {
+                unit_fields.push(field.field.clone());
+                unit_fields_hash.push(hash);
+            }
+        }
 
         let mut sink = Self {
             connection: Connection::connect(
-                params,
+                connection_params,
                 if let Some(negotiator) = &negotiator {
                     TlsMode::Prefer(negotiator)
                 } else {
@@ -100,25 +75,110 @@ impl<'s> DatabaseSink<'s> {
                 },
             )?,
             database_settings,
-            dataset_numeric_fields,
-            dataset_numeric_fields_hash,
-            dataset_textual_fields,
-            dataset_textual_fields_hash,
-            inserted_datasets: HashMap::new(),
+            dataset_fields,
+            dataset_fields_hash,
+            datasets_to_ids: HashMap::new(),
             next_dataset_id: 1,
-            unit_numeric_fields,
-            unit_numeric_fields_hash,
-            unit_textual_fields,
-            unit_textual_fields_hash,
+            unit_fields,
+            unit_fields_hash,
         };
 
-        sink.initialize_schema(abcd_fields)?;
+        sink.initialize_temporary_schema(abcd_fields)?;
 
         Ok(sink)
     }
 
-    fn initialize_schema(&mut self, abcd_fields: &HashMap<Vec<u8>, AbcdField>) -> Result<(), Error> {
-        // drop temp tables if they exist
+    /// Initialize the temporary database schema.
+    fn initialize_temporary_schema(&mut self, abcd_fields: &HashMap<Vec<u8>, AbcdField>) -> Result<(), Error> {
+        self.drop_temporary_tables()?;
+
+        self.create_temporary_dataset_table(abcd_fields)?;
+
+        self.create_temporary_unit_table(abcd_fields)?;
+
+        self.create_and_fill_temporary_mapping_table()?;
+
+        Ok(())
+    }
+
+    /// Create and fill a temporary mapping table from hashes to field names.
+    fn create_and_fill_temporary_mapping_table(&mut self) -> Result<(), Error> {
+        // create table
+        self.connection.execute(&format!(
+            "create table {}_translation (name text not null, hash text not null);",
+            self.database_settings.temp_dataset_table
+        ), &mut [])?;
+
+        // fill table
+        let statement = self.connection.prepare(&format!(
+            "insert into {}_translation(name, hash) VALUES ($1, $2);",
+            self.database_settings.temp_dataset_table
+        ))?;
+        for (name, hash) in self.dataset_fields.iter().zip(&self.dataset_fields_hash) {
+            statement.execute(&[name, hash])?;
+        }
+        for (name, hash) in self.unit_fields.iter().zip(&self.unit_fields_hash) {
+            statement.execute(&[name, hash])?;
+        }
+
+        Ok(())
+    }
+
+    /// Create the temporary unit table
+    fn create_temporary_unit_table(&mut self, abcd_fields: &HashMap<Vec<u8>, AbcdField>) -> Result<(), Error> {
+        let mut fields = vec![
+            format!("{} int not null", self.database_settings.dataset_id_column),
+        ];
+
+        for (field, hash) in self.unit_fields.iter().zip(&self.unit_fields_hash) {
+            let abcd_field = abcd_fields.get(field.as_bytes())
+                .ok_or_else(|| DatabaseSinkError::InconsistentUnitColumns(field.clone()))?;
+
+            let data_type_string = if abcd_field.numeric { "double precision" } else { "text" };
+
+            // TODO: enforce/filter not null
+            // let null_string = if abcd_field.vat_mandatory { "NOT NULL" } else { "" }
+            let null_string = "";
+
+            fields.push(format!("\"{}\" {} {}", hash, data_type_string, null_string));
+        }
+
+        self.connection.execute(&format!(
+            "create table {} ( {} );", self.database_settings.temp_unit_table, fields.join(",")
+        ), &mut [])?;
+
+        Ok(())
+    }
+
+    /// Create the temporary dataset table
+    fn create_temporary_dataset_table(&mut self, abcd_fields: &HashMap<Vec<u8>, AbcdField>) -> Result<(), Error> {
+        let mut fields = vec![
+            format!("{} int primary key", self.database_settings.dataset_id_column),
+            format!("{} text not null", self.database_settings.dataset_path_column),
+        ];
+
+        for (field, hash) in self.dataset_fields.iter().zip(&self.dataset_fields_hash) {
+            let abcd_field = abcd_fields.get(field.as_bytes())
+                .ok_or_else(|| DatabaseSinkError::InconsistentDatasetColumns(field.clone()))?;
+
+            let data_type_string = if abcd_field.numeric { "double precision" } else { "text" };
+
+            // TODO: enforce/filter not null
+            // let null_string = if abcd_field.vat_mandatory { "NOT NULL" } else { "" }
+            let null_string = "";
+
+            fields.push(format!("\"{}\" {} {}", hash, data_type_string, null_string));
+        }
+
+        self.connection.execute(&format!(
+            "create table {} ( {} );", self.database_settings.temp_dataset_table, fields.join(",")
+        ), &mut [])?;
+
+        Ok(())
+    }
+
+    /// Drop all temporary tables if they exist.
+    fn drop_temporary_tables(&mut self) -> Result<(), Error> {
         self.connection.execute(&format!(
             "DROP TABLE IF EXISTS {};", &self.database_settings.temp_unit_table
         ), &mut [])?;
@@ -129,100 +189,87 @@ impl<'s> DatabaseSink<'s> {
             "DROP TABLE IF EXISTS {}_translation;", &self.database_settings.temp_dataset_table
         ), &mut [])?;
 
-        let mut fields = Vec::new();
+        Ok(())
+    }
 
-        // create temporary dataset table
-        fields.push(format!("{} int primary key", self.database_settings.dataset_id_column));
-        for numeric_field in &self.dataset_numeric_fields_hash {
-            let null_string = if let Some(_field) = abcd_fields.get(numeric_field.as_bytes()) {
-                // TODO: enforce/filter not null
-//                if field.vat_mandatory { "NOT NULL" } else { "" }
-                ""
-            } else {
-                ""
-            };
-            fields.push(format!(
-                "\"{}\" {} double precision", numeric_field, null_string
-            ));
-        }
-        for textual_field in &self.dataset_textual_fields_hash {
-            let null_string = if let Some(_field) = abcd_fields.get(textual_field.as_bytes()) {
-                // TODO: enforce/filter not null
-//                if field.vat_mandatory { "NOT NULL" } else { "" }
-                ""
-            } else {
-                ""
-            };
-            fields.push(format!(
-                "\"{}\" {} text", textual_field, null_string
-            ));
-        }
+    /// Migrate the temporary tables to the persistent tables.
+    /// Drops the old tables.
+    pub fn migrate_schema(&mut self) -> Result<(), Error> {
+        self.create_indexes_and_statistics()?;
 
-        self.connection.execute(&format!(
-            "create table {} ( {} );", self.database_settings.temp_dataset_table, fields.join(",")
-        ), &mut [])?;
+        let transaction = self.connection.transaction_with(
+            postgres::transaction::Config::new()
+                .isolation_level(postgres::transaction::IsolationLevel::Serializable)
+                .read_only(false)
+        )?;
 
-        fields.clear();
+        self.drop_old_tables(&transaction)?;
 
-        // create temporary unit table
-        fields.push(format!("{} int not null", self.database_settings.dataset_id_column));
-        for (numeric_field, hash) in self.unit_numeric_fields.iter().zip(&self.unit_numeric_fields_hash) {
-            let null_string = if let Some(_field) = abcd_fields.get(numeric_field.as_bytes()) {
-                // TODO: enforce/filter not null
-//                if field.vat_mandatory { "NOT NULL" } else { "" }
-                ""
-            } else {
-                ""
-            };
-            fields.push(format!(
-                "\"{}\" double precision {}", hash, null_string
-            ));
-        }
-        for (textual_field, hash) in self.unit_textual_fields.iter().zip(&self.unit_textual_fields_hash) {
-            let null_string = if let Some(_field) = abcd_fields.get(textual_field.as_bytes()) {
-                // TODO: enforce/filter not null
-//                if field.vat_mandatory { "NOT NULL" } else { "" }
-                ""
-            } else {
-                ""
-            };
-            fields.push(format!(
-                "\"{}\" text {}", hash, null_string
-            ));
-        }
+        self.rename_temporary_tables(&transaction)?;
 
-        self.connection.execute(&format!(
-            "create table {} ( {} );", self.database_settings.temp_unit_table, fields.join(",")
-        ), &mut [])?;
+        self.rename_constraints_and_indexes(&transaction)?;
 
-        // create mapping table from hash to field
-        {
-            self.connection.execute(&format!(
-                "create table {}_translation (name text not null, hash text not null);",
-                self.database_settings.temp_dataset_table
-            ), &mut [])?;
-            let statement = self.connection.prepare(&format!(
-                "insert into {}_translation(name, hash) VALUES ($1, $2);",
-                self.database_settings.temp_dataset_table
-            ))?;
-            for (name, hash) in self.dataset_numeric_fields.iter().zip(&self.dataset_numeric_fields_hash) {
-                statement.execute(&[name, hash])?;
-            }
-            for (name, hash) in self.dataset_textual_fields.iter().zip(&self.dataset_textual_fields_hash) {
-                statement.execute(&[name, hash])?;
-            }
-            for (name, hash) in self.unit_numeric_fields.iter().zip(&self.unit_numeric_fields_hash) {
-                statement.execute(&[name, hash])?;
-            }
-            for (name, hash) in self.unit_textual_fields.iter().zip(&self.unit_textual_fields_hash) {
-                statement.execute(&[name, hash])?;
-            }
-        }
+        transaction.commit()?;
 
         Ok(())
     }
 
-    pub fn migrate_schema(&mut self) -> Result<(), Error> {
+    /// Drop old persistent tables.
+    fn drop_old_tables(&self, transaction: &Transaction) -> Result<(), Error> {
+        // unit table
+        transaction.execute(&format!(
+            "DROP TABLE IF EXISTS {};", &self.database_settings.unit_table
+        ), &mut [])?;
+        // dataset table
+        transaction.execute(&format!(
+            "DROP TABLE IF EXISTS {};", &self.database_settings.dataset_table
+        ), &mut [])?;
+        // translation table
+        transaction.execute(&format!(
+            "DROP TABLE IF EXISTS {}_translation;", &self.database_settings.dataset_table
+        ), &mut [])?;
+
+        Ok(())
+    }
+
+    /// Rename temporary tables to persistent tables.
+    fn rename_temporary_tables(&self, transaction: &Transaction) -> Result<(), Error> {
+        // unit table
+        transaction.execute(&format!(
+            "ALTER TABLE {} RENAME TO {};", &self.database_settings.temp_unit_table, &self.database_settings.unit_table
+        ), &mut [])?;
+
+        // dataset table
+        transaction.execute(&format!(
+            "ALTER TABLE {} RENAME TO {};", &self.database_settings.temp_dataset_table, &self.database_settings.dataset_table
+        ), &mut [])?;
+
+        // translation table
+        transaction.execute(&format!(
+            "ALTER TABLE {}_translation RENAME TO {}_translation;", &self.database_settings.temp_dataset_table, &self.database_settings.dataset_table
+        ), &mut [])?;
+
+        Ok(())
+    }
+
+    /// Rename constraints and indexes from temporary to persistent.
+    fn rename_constraints_and_indexes(&self, transaction: &Transaction) -> Result<(), Error> {
+        transaction.execute(&format!(
+            "ALTER TABLE {} RENAME CONSTRAINT {}_{}_fk TO {}_{}_fk;",
+            &self.database_settings.unit_table,
+            &self.database_settings.temp_unit_table, &self.database_settings.dataset_id_column,
+            &self.database_settings.unit_table, &self.database_settings.dataset_id_column
+        ), &mut [])?;
+        transaction.execute(&format!(
+            "ALTER INDEX {}_idx RENAME TO {}_idx;",
+            &self.database_settings.temp_unit_table, &self.database_settings.unit_table
+        ), &mut [])?;
+
+        Ok(())
+    }
+
+    /// Create foreign key relationships, indexes, clustering and statistics on the temporary tables.
+    fn create_indexes_and_statistics(&mut self) -> Result<(), Error> {
         let foreign_key_statement = format!(
             "ALTER TABLE {} ADD CONSTRAINT {}_{}_fk FOREIGN KEY ({}) REFERENCES {}({});",
             &self.database_settings.temp_unit_table,
@@ -234,7 +281,6 @@ impl<'s> DatabaseSink<'s> {
         );
         debug!("{}", &foreign_key_statement);
         self.connection.execute(&foreign_key_statement, &mut [])?;
-
         let mut hasher = sha1::Sha1::new();
         let indexed_unit_column_names = self.database_settings.unit_indexed_columns.iter()
             .map(|field| {
@@ -252,7 +298,6 @@ impl<'s> DatabaseSink<'s> {
         );
         debug!("{}", &unit_index_statement);
         self.connection.execute(&unit_index_statement, &mut [])?;
-
         let cluster_statement = format!(
             "CLUSTER {}_idx ON {};",
             &self.database_settings.temp_unit_table,
@@ -260,14 +305,12 @@ impl<'s> DatabaseSink<'s> {
         );
         debug!("{}", &cluster_statement);
         self.connection.execute(&cluster_statement, &mut [])?;
-
         let datasets_analyze_statement = format!(
             "VACUUM ANALYZE {};",
             &self.database_settings.temp_dataset_table
         );
         debug!("{}", &datasets_analyze_statement);
         self.connection.execute(&datasets_analyze_statement, &mut [])?;
-
         let units_analyze_statement = format!(
             "VACUUM ANALYZE {};",
             &self.database_settings.temp_unit_table
@@ -275,117 +318,30 @@ impl<'s> DatabaseSink<'s> {
         debug!("{}", &units_analyze_statement);
         self.connection.execute(&units_analyze_statement, &mut [])?;
 
-        let transaction = self.connection.transaction_with(
-            postgres::transaction::Config::new()
-                .isolation_level(postgres::transaction::IsolationLevel::Serializable)
-                .read_only(false)
-        )?;
-
-        // delete old tables
-        transaction.execute(&format!(
-            "DROP TABLE IF EXISTS {};", &self.database_settings.unit_table
-        ), &mut [])?;
-        transaction.execute(&format!(
-            "DROP TABLE IF EXISTS {};", &self.database_settings.dataset_table
-        ), &mut [])?;
-        transaction.execute(&format!(
-            "DROP TABLE IF EXISTS {}_translation;", &self.database_settings.dataset_table
-        ), &mut [])?;
-
-        // rename temp tables
-        transaction.execute(&format!(
-            "ALTER TABLE {} RENAME TO {};", &self.database_settings.temp_unit_table, &self.database_settings.unit_table
-        ), &mut [])?;
-        transaction.execute(&format!(
-            "ALTER TABLE {} RENAME TO {};", &self.database_settings.temp_dataset_table, &self.database_settings.dataset_table
-        ), &mut [])?;
-        // rename temp tables
-        transaction.execute(&format!(
-            "ALTER TABLE {}_translation RENAME TO {}_translation;", &self.database_settings.temp_dataset_table, &self.database_settings.dataset_table
-        ), &mut [])?;
-
-        // rename constraints/indexes
-        transaction.execute(&format!(
-            "ALTER TABLE {} RENAME CONSTRAINT {}_{}_fk TO {}_{}_fk;",
-            &self.database_settings.unit_table,
-            &self.database_settings.temp_unit_table, &self.database_settings.dataset_id_column,
-            &self.database_settings.unit_table, &self.database_settings.dataset_id_column
-        ), &mut [])?;
-        transaction.execute(&format!(
-            "ALTER INDEX {}_idx RENAME TO {}_idx;",
-            &self.database_settings.temp_unit_table, &self.database_settings.unit_table
-        ), &mut [])?;
-
-        transaction.commit()?;
-
         Ok(())
     }
 
-    // TODO: split into functions
+    /// Insert a dataset and its units into the temporary tables.
     pub fn insert_dataset(&mut self, abcd_data: &AbcdResult) -> Result<(), Error> {
-        const POSTGRES_CSV_CONFIGURATION: &str = "DELIMITER '\t', NULL '', QUOTE '\"', ESCAPE '\"', FORMAT CSV";
-
-        // retrieve id for dataset
-        // if the dataset is unseen, it is necessary to create a database entry at first
-        let dataset_hash = self.to_hash_value(&abcd_data.dataset_data);
-        let dataset_id = match self.inserted_datasets.entry(dataset_hash) {
+        // retrieve the id for the dataset
+        // if the dataset is not found, it is necessary to create a dataset database entry at first
+        let dataset_unique_string = self.to_combined_string(&abcd_data.dataset);
+        let dataset_id = match self.datasets_to_ids.entry(dataset_unique_string) {
             Entry::Occupied(e) => *e.get(),
             Entry::Vacant(o) => {
+                // retrieve next dataset id
                 let id = self.next_dataset_id;
 
-                let (dataset_numeric_data, dataset_textual_data) = &abcd_data.dataset_data;
-
-                let mut values = WriterBuilder::new()
-                    .terminator(csv::Terminator::Any(b'\n'))
-                    .delimiter(b'\t')
-                    .quote(b'"')
-                    .escape(b'"')
-                    .has_headers(false)
-                    .from_writer(vec![]);
-                let mut columns: Vec<&str> = vec![self.database_settings.dataset_id_column.as_ref()];
-
-                values.write_field(id.to_string())?;
-
-                for (numeric_field, hash) in self.dataset_numeric_fields.iter()
-                    .zip(&self.dataset_numeric_fields_hash) {
-                    columns.push(&hash);
-                    if let Some(&numeric_value) = dataset_numeric_data.get(numeric_field) {
-                        values.write_field(numeric_value.to_string())?;
-                    } else {
-                        values.write_field(""/*&[]*/)?;
-                    }
-                }
-
-                for (textual_field, hash) in self.dataset_textual_fields.iter()
-                    .zip(&self.dataset_textual_fields_hash) {
-                    columns.push(&hash);
-                    if let Some(textual_value) = dataset_textual_data.get(textual_field) {
-                        values.write_field(textual_value)?;
-                    } else {
-                        values.write_field(""/*&[]*/)?;
-                    }
-                }
-
-                values.write_record(None::<&[u8]>)?; // terminate record
-
-                let copy_statement = format!(
-                    "COPY {}(\"{}\") FROM STDIN WITH ({})",
-                    self.database_settings.temp_dataset_table, columns.join("\",\""),
-                    POSTGRES_CSV_CONFIGURATION
-                );
-
-                let value_string = values.into_inner()?;
-
-//                dbg!(&copy_statement);
-                let statement = self.connection.prepare(&copy_statement)?;
-
-//                dbg!(String::from_utf8_lossy(value_string.as_slice()));
-                statement.copy_in(
-                    &[],
-                    &mut value_string.as_slice(),
+                Self::insert_dataset_metadata(
+                    &self.database_settings,
+                    &self.connection,
+                    self.dataset_fields.as_slice(),
+                    self.dataset_fields_hash.as_slice(),
+                    abcd_data,
+                    id,
                 )?;
 
-                // store in map and increase
+                // store id in map and increase next id variable
                 o.insert(id);
                 self.next_dataset_id += 1;
 
@@ -393,79 +349,128 @@ impl<'s> DatabaseSink<'s> {
             }
         };
 
-        // insert all units
-        {
-            let mut columns: Vec<String> = vec![self.database_settings.dataset_id_column.clone()];
-            columns.extend_from_slice(self.unit_numeric_fields_hash.as_slice());
-            columns.extend_from_slice(self.unit_textual_fields_hash.as_slice());
-
-            let dataset_id_string = dataset_id.to_string();
-
-            let mut values = WriterBuilder::new()
-                .terminator(csv::Terminator::Any(b'\n'))
-                .delimiter(b'\t')
-                .quote(b'"')
-                .escape(b'"')
-                .has_headers(false)
-                .from_writer(vec![]);
-
-            // append units one by one to tsv
-            for (unit_numeric_data, unit_textual_data) in &abcd_data.units {
-                values.write_field(&dataset_id_string)?; // put id first
-
-                for numeric_field in &self.unit_numeric_fields {
-                    if let Some(&numeric_value) = unit_numeric_data.get(numeric_field) {
-                        values.write_field(numeric_value.to_string())?;
-                    } else {
-                        values.write_field("")?;
-                    }
-                }
-
-                for textual_field in &self.unit_textual_fields {
-                    if let Some(textual_value) = unit_textual_data.get(textual_field) {
-                        values.write_field(textual_value)?;
-                    } else {
-                        values.write_field("")?;
-                    }
-                }
-
-                values.write_record(None::<&[u8]>)?; // terminate record
-            }
-
-            let copy_statement = format!(
-                "COPY {}(\"{}\") FROM STDIN WITH ({})",
-                self.database_settings.temp_unit_table, columns.join("\",\""), POSTGRES_CSV_CONFIGURATION
-            );
-
-            let statement = self.connection.prepare(&copy_statement)?;
-
-//            dbg!(&value_string);
-            statement.copy_in(
-                &[],
-                &mut values.into_inner()?.as_slice(),
-            )?;
-        }
+        self.insert_units(&abcd_data, dataset_id)?;
 
         Ok(())
     }
 
-    fn to_hash_value(&self, dataset_data: &(NumericMap, TextualMap)) -> String {
-        let (dataset_numeric_data, dataset_textual_data) = dataset_data;
-
-        let mut hash = String::new();
-
-        for numeric_field in &self.dataset_numeric_fields {
-            if let Some(&numeric_value) = dataset_numeric_data.get(numeric_field) {
-                hash.push_str(&numeric_value.to_string());
+    /// Insert the dataset metadata into the temporary schema
+    fn insert_dataset_metadata(database_settings: &settings::Database,
+                               connection: &Connection,
+                               dataset_fields: &[String],
+                               dataset_fields_hash: &[String],
+                               abcd_data: &AbcdResult,
+                               id: u32) -> Result<(), Error> {
+        let mut values = WriterBuilder::new()
+            .terminator(csv::Terminator::Any(b'\n'))
+            .delimiter(b'\t')
+            .quote(b'"')
+            .escape(b'"')
+            .has_headers(false)
+            .from_writer(vec![]);
+        let mut columns: Vec<&str> = vec![
+            database_settings.dataset_id_column.as_ref(),
+            database_settings.dataset_path_column.as_ref(),
+        ];
+        values.write_field(id.to_string())?;
+        values.write_field(abcd_data.dataset_path.clone())?;
+        for (field, hash) in dataset_fields.iter().zip(dataset_fields_hash.iter()) {
+            columns.push(&hash);
+            if let Some(value) = abcd_data.dataset.get(field) {
+                values.write_field(value.to_string())?;
+            } else {
+                values.write_field("")?;
             }
         }
+        // terminate record
+        values.write_record(None::<&[u8]>)?;
 
-        for textual_field in &self.dataset_textual_fields {
-            if let Some(textual_value) = dataset_textual_data.get(textual_field) {
-                hash.push_str(textual_value);
+        let copy_statement = format!(
+            "COPY {}(\"{}\") FROM STDIN WITH ({})",
+            database_settings.temp_dataset_table, columns.join("\",\""),
+            POSTGRES_CSV_CONFIGURATION
+        );
+        // dbg!(&copy_statement);
+
+        let value_string = values.into_inner()?;
+        // dbg!(String::from_utf8_lossy(value_string.as_slice()));
+
+        let statement = connection.prepare(&copy_statement)?;
+        statement.copy_in(
+            &[],
+            &mut value_string.as_slice(),
+        )?;
+
+        Ok(())
+    }
+
+    /// Insert the dataset units into the temporary schema
+    fn insert_units(&mut self, abcd_data: &AbcdResult, dataset_id: u32) -> Result<(), Error> {
+        let mut columns: Vec<String> = vec![self.database_settings.dataset_id_column.clone()];
+        columns.extend_from_slice(self.unit_fields_hash.as_slice());
+
+        let dataset_id_string = dataset_id.to_string();
+
+        let mut values = WriterBuilder::new()
+            .terminator(csv::Terminator::Any(b'\n'))
+            .delimiter(b'\t')
+            .quote(b'"')
+            .escape(b'"')
+            .has_headers(false)
+            .from_writer(vec![]);
+
+        // append units one by one to tsv
+        for unit_data in &abcd_data.units {
+            values.write_field(&dataset_id_string)?; // put id first
+
+            for field in &self.unit_fields {
+                if let Some(value) = unit_data.get(field) {
+                    values.write_field(value.to_string())?;
+                } else {
+                    values.write_field("")?;
+                }
+            }
+
+            values.write_record(None::<&[u8]>)?; // terminate record
+        }
+
+        let copy_statement = format!(
+            "COPY {}(\"{}\") FROM STDIN WITH ({})",
+            self.database_settings.temp_unit_table, columns.join("\",\""), POSTGRES_CSV_CONFIGURATION
+        );
+
+        let statement = self.connection.prepare(&copy_statement)?;
+//            dbg!(&value_string);
+        statement.copy_in(
+            &[],
+            &mut values.into_inner()?.as_slice(),
+        )?;
+
+        Ok(())
+    }
+
+    /// Combines all values of the dataset's metadata into a new string.
+    fn to_combined_string(&self, dataset_data: &ValueMap) -> String {
+        let mut hash = String::new();
+
+        for field in &self.dataset_fields {
+            if let Some(value) = dataset_data.get(field) {
+                hash.push_str(&value.to_string());
             }
         }
 
         hash
     }
+}
+
+/// An error enum for different database sink errors.
+#[derive(Debug, Fail)]
+pub enum DatabaseSinkError {
+    /// This error occurs when there is an inconsistency between the ABCD dataset data and the sink's columns.
+    #[fail(display = "Inconsistent dataset columns: {}", 0)]
+    InconsistentDatasetColumns(String),
+
+    /// This error occurs when there is an inconsistency between the ABCD unit data and the sink's columns.
+    #[fail(display = "Inconsistent unit columns: {}", 0)]
+    InconsistentUnitColumns(String),
 }

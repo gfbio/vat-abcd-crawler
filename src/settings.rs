@@ -32,6 +32,7 @@ pub struct Database {
     pub dataset_table: String,
     pub temp_dataset_table: String,
     pub dataset_id_column: String,
+    pub dataset_path_column: String,
     pub unit_table: String,
     pub temp_unit_table: String,
     pub unit_indexed_columns: Vec<String>,

@@ -47,11 +47,12 @@ pub fn load_bms_datasets(url: &str) -> Result<Vec<BmsDataset>, Error> {
 pub struct DownloadedBmsDataset<'d> {
     pub dataset: &'d BmsDataset,
     pub path: PathBuf,
+    pub url: String,
 }
 
 impl<'d> DownloadedBmsDataset<'d> {
-    pub fn new(dataset: &'d BmsDataset, path: PathBuf) -> Self {
-        Self { dataset, path }
+    pub fn new(dataset: &'d BmsDataset, path: PathBuf, url: String) -> Self {
+        Self { dataset, path, url }
     }
 }
 
@@ -60,8 +61,9 @@ impl<'d> DownloadedBmsDataset<'d> {
 pub fn download_datasets<'d, 't>(temp_dir: &'t Path, datasets: &'d [BmsDataset]) -> impl Iterator<Item=Result<DownloadedBmsDataset<'d>, Error>> + 'd {
     let temp_dir = temp_dir.to_path_buf();
     datasets.iter().enumerate().map(move |(i, dataset)| {
+        let url = dataset.get_latest_archive()?.xml_archive.clone();
         let download_file_path = temp_dir.join(Path::new(&format!("{}.zip", i)));
-        download_dataset(&download_file_path, dataset).map(|_| DownloadedBmsDataset::new(dataset, download_file_path))
+        download_dataset(url, download_file_path, dataset)
     })
 }
 
@@ -82,16 +84,14 @@ impl DatasetContainsNoFileError {
 }
 
 /// Download a dataset (the latest) into the given file path.
-pub fn download_dataset(download_file_path: &Path, dataset: &BmsDataset) -> Result<(), Error> {
-    let url = dataset.get_latest_archive()?.xml_archive.as_str();
+pub fn download_dataset(url: String, download_file_path: PathBuf, dataset: &BmsDataset) -> Result<DownloadedBmsDataset, Error> {
+    let mut response = reqwest::get(&url)?;
 
-    let mut response = reqwest::get(url)?;
-
-    let output = File::create(download_file_path)?;
+    let output = File::create(&download_file_path)?;
 
     // copy file to temp path
     let mut writer = BufWriter::new(&output);
     std::io::copy(&mut response, &mut writer)?;
 
-    Ok(())
+    Ok(DownloadedBmsDataset::new(dataset, download_file_path, url))
 }

@@ -1,14 +1,13 @@
 use crate::abcd_fields::AbcdField;
 use crate::abcd_version::AbcdVersion;
+use crate::vat_type::VatType;
 use failure::Error;
 use failure::Fail;
-//use log::debug;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashMap;
 
-pub type NumericMap = HashMap<String, f64>;
-pub type TextualMap = HashMap<String, String>;
+pub type ValueMap = HashMap<String, VatType>;
 
 /// This parser processes ABCD XML files
 #[derive(Debug)]
@@ -17,8 +16,7 @@ pub struct AbcdParser<'a> {
     abcd_version: AbcdVersion,
     xml_tag_path: Vec<u8>,
     xml_buffer: Vec<u8>,
-    numeric_values: NumericMap,
-    textual_values: TextualMap,
+    values: ValueMap,
 }
 
 impl<'a> AbcdParser<'a> {
@@ -28,12 +26,11 @@ impl<'a> AbcdParser<'a> {
             abcd_version: AbcdVersion::Unknown,
             xml_tag_path: Vec::new(),
             xml_buffer: Vec::new(),
-            numeric_values: NumericMap::new(),
-            textual_values: TextualMap::new(),
+            values: ValueMap::new(),
         }
     }
 
-    pub fn parse(&mut self, xml_bytes: &[u8]) -> Result<AbcdResult, Error> {
+    pub fn parse(&mut self, dataset_path: &str, xml_bytes: &[u8]) -> Result<AbcdResult, Error> {
         let mut xml_reader = Reader::from_reader(xml_bytes);
         xml_reader.trim_text(true);
 
@@ -72,7 +69,7 @@ impl<'a> AbcdParser<'a> {
 //                            dbg!(&textual_values);
 //                            dbg!(units);
 
-                            dataset_data = Some(self.finish_maps())
+                            dataset_data = Some(self.finish_map())
                         }
                         _ => {} // ignore other start tags
                     }
@@ -90,7 +87,7 @@ impl<'a> AbcdParser<'a> {
 //                        dbg!(&numeric_values);
 //                        dbg!(&textual_values);
 
-                        units.push(self.finish_maps());
+                        units.push(self.finish_map());
                     }
                 }
                 Ok(Event::Text(ref e)) => {
@@ -98,15 +95,15 @@ impl<'a> AbcdParser<'a> {
                         if abcd_field.numeric {
                             let string = String::from_utf8_lossy(e.escaped());
                             if let Ok(number) = string.parse::<f64>() {
-                                self.numeric_values.insert(
+                                self.values.insert(
                                     abcd_field.field.clone(),
-                                    number,
+                                    number.into(),
                                 );
                             }
                         } else {
-                            self.textual_values.insert(
+                            self.values.insert(
                                 abcd_field.field.clone(),
-                                String::from_utf8_lossy(e.escaped()).to_string(),
+                                String::from_utf8_lossy(e.escaped()).into(),
                             );
                         }
                     }
@@ -122,7 +119,7 @@ impl<'a> AbcdParser<'a> {
         self.clear(); // clear resources like buffers
 
         if let Some(dataset_data) = dataset_data {
-            Ok(AbcdResult::new(dataset_data, units))
+            Ok(AbcdResult::new(dataset_path.into(), dataset_data, units))
         } else {
             Err(AbcdContainsNoDatasetMetadata {}.into())
         }
@@ -131,14 +128,12 @@ impl<'a> AbcdParser<'a> {
     fn clear(&mut self) {
         self.xml_tag_path.clear();
         self.xml_buffer.clear();
-        self.numeric_values.clear();
-        self.textual_values.clear();
+        self.values.clear();
     }
 
-    fn finish_maps(&mut self) -> (NumericMap, TextualMap) {
-        let result = (self.numeric_values.clone(), self.textual_values.clone());
-        self.numeric_values.clear();
-        self.textual_values.clear();
+    fn finish_map(&mut self) -> ValueMap {
+        let result = self.values.clone();
+        self.values.clear();
         result
     }
 
@@ -152,14 +147,15 @@ impl<'a> AbcdParser<'a> {
 
 /// This struct reflects the result of a parsed xml file
 pub struct AbcdResult {
-    pub dataset_data: (NumericMap, TextualMap),
-    pub units: Vec<(NumericMap, TextualMap)>,
+    pub dataset_path: String,
+    pub dataset: ValueMap,
+    pub units: Vec<ValueMap>,
 }
 
 impl AbcdResult {
     /// This constructor creates a new `AbcdResult` from dataset and unit data.
-    pub fn new(dataset_data: (NumericMap, TextualMap), units: Vec<(NumericMap, TextualMap)>) -> Self {
-        AbcdResult { dataset_data, units }
+    pub fn new(dataset_path: String, dataset_data: ValueMap, units_data: Vec<ValueMap>) -> Self {
+        AbcdResult { dataset_path, dataset: dataset_data, units: units_data }
     }
 }
 

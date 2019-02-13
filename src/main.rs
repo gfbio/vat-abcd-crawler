@@ -5,6 +5,7 @@ mod archive_reader;
 mod bms_datasets;
 mod database_sink;
 mod settings;
+mod vat_type;
 
 use clap::{App, Arg, crate_authors, crate_description, crate_version};
 use crate::abcd_fields::load_abcd_fields;
@@ -108,7 +109,7 @@ fn main() {
 //            string.truncate(200);
 //            dbg!(string);
 
-            let abcd_data = match abcd_parser.parse(&xml_bytes) {
+            let abcd_data = match abcd_parser.parse(&download.url, &xml_bytes) {
                 Ok(data) => data,
                 Err(e) => {
                     warn!("Unable to retrieve ABCD data: {}", e);
@@ -116,9 +117,7 @@ fn main() {
                 }
             };
 
-//            database_sink
-
-            trace!("{:?}", abcd_data.dataset_data);
+            trace!("{:?}", abcd_data.dataset);
 //            for unit in abcd_data.units {
 //                trace!("{:?}", unit);
 //            }

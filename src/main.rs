@@ -135,6 +135,7 @@ fn main() {
     };
 }
 
+/// Initialize the logger.
 fn initialize_logger(file_path: &Path, settings: &Settings) -> Result<(), Error> {
     let mut loggers: Vec<Box<SharedLogger>> = Vec::new();
 

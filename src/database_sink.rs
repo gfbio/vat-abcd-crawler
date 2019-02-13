@@ -1,4 +1,3 @@
-//use postgres::types::{IsNull, Type, ToSql};
 use crate::abcd_fields::AbcdField;
 use crate::abcd_parser::AbcdResult;
 use crate::abcd_parser::ValueMap;

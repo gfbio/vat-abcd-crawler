@@ -51,6 +51,7 @@ pub struct DownloadedBmsDataset<'d> {
 }
 
 impl<'d> DownloadedBmsDataset<'d> {
+    /// Create a new descriptor for a downloaded BMS dataset.
     pub fn new(dataset: &'d BmsDataset, path: PathBuf, url: String) -> Self {
         Self { dataset, path, url }
     }

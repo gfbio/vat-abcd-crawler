@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 pub type ValueMap = HashMap<String, VatType>;
 
-/// This parser processes ABCD XML files
+/// This parser processes ABCD XML files.
 #[derive(Debug)]
 pub struct AbcdParser<'a> {
     abcd_fields: &'a HashMap<Vec<u8>, AbcdField>,
@@ -20,6 +20,7 @@ pub struct AbcdParser<'a> {
 }
 
 impl<'a> AbcdParser<'a> {
+    /// Create a new `AbcdParser`.
     pub fn new(abcd_fields: &'a HashMap<Vec<u8>, AbcdField>) -> Self {
         Self {
             abcd_fields,
@@ -30,6 +31,7 @@ impl<'a> AbcdParser<'a> {
         }
     }
 
+    /// Parse a binary XML file to `AbcdResult`s.
     pub fn parse(&mut self, dataset_path: &str, xml_bytes: &[u8]) -> Result<AbcdResult, Error> {
         let mut xml_reader = Reader::from_reader(xml_bytes);
         xml_reader.trim_text(true);
@@ -125,18 +127,21 @@ impl<'a> AbcdParser<'a> {
         }
     }
 
+    /// Clear all buffers.
     fn clear(&mut self) {
         self.xml_tag_path.clear();
         self.xml_buffer.clear();
         self.values.clear();
     }
 
+    /// Clear value map and return the old values.
     fn finish_map(&mut self) -> ValueMap {
         let result = self.values.clone();
         self.values.clear();
         result
     }
 
+    /// Strip the namespace from a tag.
     fn strip_tag(tag: &[u8]) -> impl Iterator<Item=&u8> {
         let has_colon = tag.iter().any(|&b| b == b':');
         tag.iter()

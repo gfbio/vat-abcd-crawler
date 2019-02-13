@@ -32,15 +32,6 @@ impl From<f64> for VatType {
     }
 }
 
-//impl ToString for VatType {
-//    fn to_string(&self) -> String {
-//        match self {
-//            VatType::Textual(value) => value.clone(),
-//            VatType::Numeric(value) => value.to_string(),
-//        }
-//    }
-//}
-
 impl fmt::Display for VatType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

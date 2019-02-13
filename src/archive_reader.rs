@@ -5,12 +5,14 @@ use zip::ZipArchive;
 use std::io::Read;
 use std::path::Path;
 
+/// This struct provides a reader that processes a stream of XML files in a ZIP archive.
 pub struct ArchiveReader {
     archive: ZipArchive<BufReader<File>>,
 //    archive_name: String,
 }
 
 impl ArchiveReader {
+    /// Create an `ArchiveReader` from a path to a ZIP archive.
     pub fn from_path(path: &Path) -> Result<Self, Error> {
 //        let archive_name = path.display().to_string();
 
@@ -20,25 +22,24 @@ impl ArchiveReader {
 
         Ok(Self {
             archive,
-//            archive_name,
         })
     }
 
+    /// Creates an iterator that traverses over all XML files in the ZIP archive.
     pub fn bytes_iter(&mut self) -> ArchiveReaderBytesIter {
         ArchiveReaderBytesIter {
             index: 0,
             end: self.archive.len(),
             archive: &mut self.archive,
-//            archive_name: &self.archive_name,
         }
     }
 }
 
+/// This iterator traverses over all XML files in the ZIP archive.
 pub struct ArchiveReaderBytesIter<'a> {
     index: usize,
     end: usize,
     archive: &'a mut ZipArchive<BufReader<File>>,
-//    archive_name: &'a str,
 }
 
 impl<'a> Iterator for ArchiveReaderBytesIter<'a> {
@@ -63,6 +64,7 @@ impl<'a> Iterator for ArchiveReaderBytesIter<'a> {
     }
 }
 
+/// Read the `index`th XML file from a ZIP archive.
 fn read_contents_of_file(archive: &mut ZipArchive<BufReader<File>>, index: usize) -> Result<Vec<u8>, Error> {
     let mut inner_file = archive.by_index(index)?;
     let mut content = Vec::new();

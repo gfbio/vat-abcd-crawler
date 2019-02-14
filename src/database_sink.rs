@@ -52,14 +52,14 @@ impl<'s> DatabaseSink<'s> {
         for field in abcd_fields.values() {
             let hash = {
                 hasher.reset();
-                hasher.update(field.field.as_bytes());
+                hasher.update(field.name.as_bytes());
                 hasher.digest().to_string()
             };
             if field.global_field {
-                dataset_fields.push(field.field.clone());
+                dataset_fields.push(field.name.clone());
                 dataset_fields_hash.push(hash);
             } else {
-                unit_fields.push(field.field.clone());
+                unit_fields.push(field.name.clone());
                 unit_fields_hash.push(hash);
             }
         }
@@ -219,6 +219,10 @@ impl<'s> DatabaseSink<'s> {
 
     /// Drop old persistent tables.
     fn drop_old_tables(&self, transaction: &Transaction) -> Result<(), Error> {
+        // listing view
+        transaction.execute(&format!(
+            "DROP VIEW IF EXISTS {view_name};", view_name = self.database_settings.listing_view
+        ), &[])?;
         // unit table
         transaction.execute(&format!(
             "DROP TABLE IF EXISTS {};", &self.database_settings.unit_table
@@ -230,10 +234,6 @@ impl<'s> DatabaseSink<'s> {
         // translation table
         transaction.execute(&format!(
             "DROP TABLE IF EXISTS {}_translation;", &self.database_settings.dataset_table
-        ), &[])?;
-        // listing view
-        transaction.execute(&format!(
-            "DROP VIEW IF EXISTS {view_name};", view_name = self.database_settings.listing_view
         ), &[])?;
 
         Ok(())

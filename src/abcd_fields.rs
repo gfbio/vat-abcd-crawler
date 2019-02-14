@@ -9,7 +9,7 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AbcdField {
-    pub field: String,
+    pub name: String,
     pub numeric: bool,
     pub vat_mandatory: bool,
     pub gfbio_mandatory: bool,
@@ -29,7 +29,7 @@ pub fn load_abcd_fields(path: &Path) -> Result<HashMap<Vec<u8>, AbcdField>, Erro
 fn fields_to_map(fields: Vec<AbcdField>) -> HashMap<Vec<u8>, AbcdField> {
     let mut map = HashMap::with_capacity(fields.len());
     for field in fields {
-        map.insert(field.field.as_bytes().into(), field);
+        map.insert(field.name.as_bytes().into(), field);
     }
     map
 }

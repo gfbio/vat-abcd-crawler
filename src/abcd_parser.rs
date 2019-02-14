@@ -102,13 +102,13 @@ impl<'a> AbcdParser<'a> {
                             let string = String::from_utf8_lossy(e.escaped());
                             if let Ok(number) = string.parse::<f64>() {
                                 self.values.insert(
-                                    abcd_field.field.clone(),
+                                    abcd_field.name.clone(),
                                     number.into(),
                                 );
                             }
                         } else {
                             self.values.insert(
-                                abcd_field.field.clone(),
+                                abcd_field.name.clone(),
                                 String::from_utf8_lossy(e.escaped()).into(),
                             );
                         }

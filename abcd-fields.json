@@ -1,6 +1,6 @@
 [
   {
-    "field": "/DataSets/DataSet/DatasetGUID",
+    "name": "/DataSets/DataSet/DatasetGUID",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -8,7 +8,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/TechnicalContacts/TechnicalContact/Name",
+    "name": "/DataSets/DataSet/TechnicalContacts/TechnicalContact/Name",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -16,7 +16,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/TechnicalContacts/TechnicalContact/Name",
+    "name": "/DataSets/DataSet/TechnicalContacts/TechnicalContact/Email",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -24,7 +24,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/TechnicalContacts/TechnicalContact/Name",
+    "name": "/DataSets/DataSet/ContentContacts/ContentContact/Name",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -32,7 +32,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/ContentContacts/ContentContact/Email",
+    "name": "/DataSets/DataSet/ContentContacts/ContentContact/Email",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -40,7 +40,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Metadata/Description/Representation/Title",
+    "name": "/DataSets/DataSet/Metadata/Description/Representation/Title",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -48,7 +48,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Metadata/Description/Representation/Details",
+    "name": "/DataSets/DataSet/Metadata/Description/Representation/Details",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -56,7 +56,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Metadata/Description/Representation/URI",
+    "name": "/DataSets/DataSet/Metadata/Description/Representation/URI",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -64,7 +64,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Metadata/RevisionData/DateModified",
+    "name": "/DataSets/DataSet/Metadata/RevisionData/DateModified",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -72,7 +72,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Metadata/IPRStatements/Licenses/License/Text",
+    "name": "/DataSets/DataSet/Metadata/IPRStatements/Licenses/License/Text",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -80,7 +80,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Metadata/IPRStatements/Licenses/License/Details",
+    "name": "/DataSets/DataSet/Metadata/IPRStatements/Citations/Citation/Text",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -88,7 +88,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Metadata/IPRStatements/Licenses/License/URI",
+    "name": "/DataSets/DataSet/Metadata/IPRStatements/Licenses/License/Details",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -96,7 +96,15 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/SourceInstitutionID",
+    "name": "/DataSets/DataSet/Metadata/IPRStatements/Licenses/License/URI",
+    "numeric": false,
+    "vatMandatory": false,
+    "gfbioMandatory": false,
+    "globalField": true,
+    "unit": ""
+  },
+  {
+    "name": "/DataSets/DataSet/Units/Unit/SourceInstitutionID",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -104,7 +112,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/SourceID",
+    "name": "/DataSets/DataSet/Units/Unit/SourceID",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -112,7 +120,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/UnitID",
+    "name": "/DataSets/DataSet/Units/Unit/UnitID",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -120,7 +128,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/DateLastEdited",
+    "name": "/DataSets/DataSet/Units/Unit/DateLastEdited",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -128,7 +136,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/Identifications/Identification/Result/TaxonIdentified/HigherTaxa/HigherTaxon/HigherTaxonName",
+    "name": "/DataSets/DataSet/Units/Unit/Identifications/Identification/Result/TaxonIdentified/HigherTaxa/HigherTaxon/HigherTaxonName",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -136,7 +144,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/Identifications/Identification/Result/TaxonIdentified/HigherTaxa/HigherTaxon/HigherTaxonRank",
+    "name": "/DataSets/DataSet/Units/Unit/Identifications/Identification/Result/TaxonIdentified/HigherTaxa/HigherTaxon/HigherTaxonRank",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -144,7 +152,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/Identifications/Identification/Result/TaxonIdentified/ScientificName/FullScientificNameString",
+    "name": "/DataSets/DataSet/Units/Unit/Identifications/Identification/Result/TaxonIdentified/ScientificName/FullScientificNameString",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -152,7 +160,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/RecordBasis",
+    "name": "/DataSets/DataSet/Units/Unit/RecordBasis",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -160,7 +168,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/FileURI",
+    "name": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/FileURI",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -168,7 +176,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/Format",
+    "name": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/Format",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -176,7 +184,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/IPR/Licenses/License/Text",
+    "name": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/IPR/Licenses/License/Text",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -184,7 +192,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/IPR/Licenses/License/Details",
+    "name": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/IPR/Licenses/License/Details",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -192,7 +200,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/IPR/Licenses/License/URI",
+    "name": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/IPR/Licenses/License/URI",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -200,7 +208,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/Creator",
+    "name": "/DataSets/DataSet/Units/Unit/MultiMediaObjects/MultiMediaObject/Creator",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -208,7 +216,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/Gathering/DateTime/ISODateTimeBegin",
+    "name": "/DataSets/DataSet/Units/Unit/Gathering/DateTime/ISODateTimeBegin",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -216,7 +224,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/Gathering/Agents/GatheringAgent/AgentText",
+    "name": "/DataSets/DataSet/Units/Unit/Gathering/Agents/GatheringAgent/AgentText",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -224,7 +232,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/Gathering/LocalityText",
+    "name": "/DataSets/DataSet/Units/Unit/Gathering/LocalityText",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -232,7 +240,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/Gathering/Country/Name",
+    "name": "/DataSets/DataSet/Units/Unit/Gathering/Country/Name",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -240,7 +248,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/Gathering/Country/ISO3166Code",
+    "name": "/DataSets/DataSet/Units/Unit/Gathering/Country/ISO3166Code",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": false,
@@ -248,7 +256,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal",
+    "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal",
     "numeric": true,
     "vatMandatory": true,
     "gfbioMandatory": true,
@@ -256,7 +264,7 @@
     "unit": "°"
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal",
+    "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal",
     "numeric": true,
     "vatMandatory": true,
     "gfbioMandatory": true,
@@ -264,7 +272,7 @@
     "unit": "°"
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/SpatialDatum",
+    "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/SpatialDatum",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,
@@ -272,7 +280,7 @@
     "unit": ""
   },
   {
-    "field": "/DataSets/DataSet/Units/Unit/RecordURI",
+    "name": "/DataSets/DataSet/Units/Unit/RecordURI",
     "numeric": false,
     "vatMandatory": false,
     "gfbioMandatory": true,

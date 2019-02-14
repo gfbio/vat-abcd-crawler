@@ -18,6 +18,8 @@ pub struct Abcd {
 #[derive(Debug, Deserialize)]
 pub struct Bms {
     pub monitor_url: String,
+    pub provider_url: String,
+    pub landing_page_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,6 +35,8 @@ pub struct Database {
     pub temp_dataset_table: String,
     pub dataset_id_column: String,
     pub dataset_path_column: String,
+    pub dataset_landing_page_column: String,
+    pub dataset_provider_column: String,
     pub unit_table: String,
     pub temp_unit_table: String,
     pub unit_indexed_columns: Vec<String>,

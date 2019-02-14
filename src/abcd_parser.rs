@@ -32,7 +32,11 @@ impl<'a> AbcdParser<'a> {
     }
 
     /// Parse a binary XML file to `AbcdResult`s.
-    pub fn parse(&mut self, dataset_path: &str, xml_bytes: &[u8]) -> Result<AbcdResult, Error> {
+    pub fn parse(&mut self,
+                 dataset_path: &str,
+                 landing_page: &str,
+                 provider_id: &str,
+                 xml_bytes: &[u8]) -> Result<AbcdResult, Error> {
         let mut xml_reader = Reader::from_reader(xml_bytes);
         xml_reader.trim_text(true);
 
@@ -121,7 +125,13 @@ impl<'a> AbcdParser<'a> {
         self.clear(); // clear resources like buffers
 
         if let Some(dataset_data) = dataset_data {
-            Ok(AbcdResult::new(dataset_path.into(), dataset_data, units))
+            Ok(AbcdResult::new(
+                dataset_path.into(),
+                landing_page.into(),
+                provider_id.into(),
+                dataset_data,
+                units,
+            ))
         } else {
             Err(AbcdContainsNoDatasetMetadata {}.into())
         }
@@ -150,17 +160,29 @@ impl<'a> AbcdParser<'a> {
     }
 }
 
-/// This struct reflects the result of a parsed xml file
+/// This struct reflects the result of a parsed xml file with miscellaneous additional static meta data
 pub struct AbcdResult {
     pub dataset_path: String,
+    pub landing_page: String,
+    pub provider_id: String,
     pub dataset: ValueMap,
     pub units: Vec<ValueMap>,
 }
 
 impl AbcdResult {
     /// This constructor creates a new `AbcdResult` from dataset and unit data.
-    pub fn new(dataset_path: String, dataset_data: ValueMap, units_data: Vec<ValueMap>) -> Self {
-        AbcdResult { dataset_path, dataset: dataset_data, units: units_data }
+    pub fn new(dataset_path: String,
+               landing_page: String,
+               provider_id: String,
+               dataset_data: ValueMap,
+               units_data: Vec<ValueMap>) -> Self {
+        AbcdResult {
+            dataset_path,
+            landing_page,
+            provider_id,
+            dataset: dataset_data,
+            units: units_data,
+        }
     }
 }
 

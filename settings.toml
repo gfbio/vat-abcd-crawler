@@ -11,6 +11,8 @@ fields_file = "abcd-fields.json"
 
 [bms]
 monitor_url = "http://bms.gfbio.org/services/xml-archives/?provider=&dsa="
+provider_url = "https://bms.gfbio.org/services/providers/?provider=&name="
+landing_page_url = "http://bms.gfbio.org/services/landingpages/?output=json"
 
 [database]
 host = "localhost"
@@ -24,6 +26,8 @@ dataset_table = ""
 temp_dataset_table = ""
 dataset_id_column = "dataset_id"
 dataset_path_column = "dataset_path"
+dataset_landing_page_column = "dataset_landing_page"
+dataset_provider_column = "dataset_provider"
 unit_table = ""
 temp_unit_table = ""
 unit_indexed_columns = [

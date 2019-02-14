@@ -3,6 +3,7 @@ mod abcd_parser;
 mod abcd_version;
 mod archive_reader;
 mod bms_datasets;
+mod bms_providers;
 mod database_sink;
 mod settings;
 mod vat_type;
@@ -20,6 +21,7 @@ use settings::Settings;
 use simplelog::{CombinedLogger, SharedLogger, TermLogger, WriteLogger};
 use std::fs::File;
 use std::path::Path;
+use crate::bms_providers::load_bms_providers_as_map;
 
 fn main() {
     let matches = App::new("VAT ABCD Crawler")
@@ -67,6 +69,14 @@ fn main() {
         }
     };
 
+    let bms_providers = match load_bms_providers_as_map(&settings.bms.provider_url) {
+        Ok(providers) => providers,
+        Err(e) => {
+            error!("Unable to download providers from BMS: {}", e);
+            return; // stop program
+        }
+    };
+
     let bms_datasets = match load_bms_datasets(&settings.bms.monitor_url) {
         Ok(datasets) => datasets,
         Err(e) => {
@@ -109,7 +119,26 @@ fn main() {
 //            string.truncate(200);
 //            dbg!(string);
 
-            let abcd_data = match abcd_parser.parse(&download.url, &xml_bytes) {
+            let bms_provider = match bms_providers.get(&download.dataset.provider_url) {
+                Some(provider) => provider,
+                None => {
+                    warn!("Unable to retrieve BMS provider from map for {}", download.dataset.provider_url);
+                    continue;
+                }
+            };
+
+            let landing_page = match download.dataset.get_landing_page(&settings, &bms_provider) {
+                Ok(landing_page) => landing_page,
+                Err(e) => {
+                    warn!("Unable to generate landing page for {}; {}", download.dataset.dataset, e);
+                    continue;
+                }
+            };
+
+            let abcd_data = match abcd_parser.parse(&download.url,
+                                                    &landing_page,
+                                                    &bms_provider.name,
+                                                    &xml_bytes) {
                 Ok(data) => data,
                 Err(e) => {
                     warn!("Unable to retrieve ABCD data: {}", e);

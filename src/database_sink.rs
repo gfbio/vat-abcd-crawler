@@ -152,8 +152,10 @@ impl<'s> DatabaseSink<'s> {
     /// Create the temporary dataset table
     fn create_temporary_dataset_table(&mut self, abcd_fields: &HashMap<Vec<u8>, AbcdField>) -> Result<(), Error> {
         let mut fields = vec![
-            format!("{} int primary key", self.database_settings.dataset_id_column),
-            format!("{} text not null", self.database_settings.dataset_path_column),
+            format!("{} int primary key", self.database_settings.dataset_id_column), // id
+            format!("{} text not null", self.database_settings.dataset_path_column), // path
+            format!("{} text not null", self.database_settings.dataset_landing_page_column), // landing page
+            format!("{} text not null", self.database_settings.dataset_provider_column), // provider name
         ];
 
         for (field, hash) in self.dataset_fields.iter().zip(&self.dataset_fields_hash) {
@@ -370,9 +372,13 @@ impl<'s> DatabaseSink<'s> {
         let mut columns: Vec<&str> = vec![
             database_settings.dataset_id_column.as_ref(),
             database_settings.dataset_path_column.as_ref(),
+            database_settings.dataset_landing_page_column.as_ref(),
+            database_settings.dataset_provider_column.as_ref(),
         ];
         values.write_field(id.to_string())?;
         values.write_field(abcd_data.dataset_path.clone())?;
+        values.write_field(abcd_data.landing_page.clone())?;
+        values.write_field(abcd_data.provider_id.clone())?;
         for (field, hash) in dataset_fields.iter().zip(dataset_fields_hash.iter()) {
             columns.push(&hash);
             if let Some(value) = abcd_data.dataset.get(field) {

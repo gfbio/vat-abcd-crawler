@@ -5,6 +5,8 @@ use std::fs::File;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::io::BufWriter;
+use crate::bms_providers::BmsProvider;
+use crate::settings::Settings;
 
 /// This struct contains dataset information from the BMS
 #[derive(Debug, Deserialize, Serialize)]
@@ -24,11 +26,34 @@ pub struct BmsXmlArchive {
     pub latest: bool,
 }
 
+/// This struct reflects the result of a BMS landing page generator request.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BmsLandingPage {
+    provider: String,
+    data_set: String,
+    data_unit: String,
+}
+
 impl BmsDataset {
+    /// Retrieve the archive with the latest flag from a BMS archive.
     pub fn get_latest_archive(&self) -> Result<&BmsXmlArchive, DatasetContainsNoFileError> {
         self.xml_archives.iter()
             .find(|archive| archive.latest) // get latest archive version
             .ok_or_else(|| DatasetContainsNoFileError::new(&self.dataset))
+    }
+
+    /// Call the landing page generator from the BMS and return the resulting url string.
+    pub fn get_landing_page(&self, settings: &Settings, providers: &BmsProvider) -> Result<String, Error> {
+        reqwest::Client::new()
+            .get(&format!(
+                "{}&provider={}&dsa={}",
+                &settings.bms.landing_page_url, providers.id, self.dsa
+            ))
+            .send()?
+            .json::<BmsLandingPage>()
+            .map(|bms_landing_page| bms_landing_page.data_set)
+            .map_err(|e| e.into())
     }
 }
 

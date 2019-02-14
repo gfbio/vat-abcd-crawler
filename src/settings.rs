@@ -32,6 +32,7 @@ pub struct Database {
     pub password: String,
     pub schema: String,
     pub dataset_table: String,
+    pub listing_view: String,
     pub temp_dataset_table: String,
     pub dataset_id_column: String,
     pub dataset_path_column: String,

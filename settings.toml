@@ -30,6 +30,7 @@ dataset_landing_page_column = "dataset_landing_page"
 dataset_provider_column = "dataset_provider"
 unit_table = ""
 temp_unit_table = ""
+listing_view = "dataset_listing"
 unit_indexed_columns = [
     "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal",
     "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal",

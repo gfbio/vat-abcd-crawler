@@ -106,6 +106,22 @@ fn main() {
                   .unwrap_or_else(|_| "-")
         );
 
+        let bms_provider = match bms_providers.get(&download.dataset.provider_url) {
+            Some(provider) => provider,
+            None => {
+                warn!("Unable to retrieve BMS provider from map for {}", download.dataset.provider_url);
+                continue;
+            }
+        };
+
+        let landing_page = match download.dataset.get_landing_page(&settings, &bms_provider) {
+            Ok(landing_page) => landing_page,
+            Err(e) => {
+                warn!("Unable to generate landing page for {}; {}", download.dataset.dataset, e);
+                continue;
+            }
+        };
+
         for xml_bytes_result in ArchiveReader::from_path(&download.path).unwrap().bytes_iter() {
             let xml_bytes = match xml_bytes_result {
                 Ok(bytes) => bytes,
@@ -118,22 +134,6 @@ fn main() {
 //            let mut string = String::from_utf8(xml_bytes).unwrap();
 //            string.truncate(200);
 //            dbg!(string);
-
-            let bms_provider = match bms_providers.get(&download.dataset.provider_url) {
-                Some(provider) => provider,
-                None => {
-                    warn!("Unable to retrieve BMS provider from map for {}", download.dataset.provider_url);
-                    continue;
-                }
-            };
-
-            let landing_page = match download.dataset.get_landing_page(&settings, &bms_provider) {
-                Ok(landing_page) => landing_page,
-                Err(e) => {
-                    warn!("Unable to generate landing page for {}; {}", download.dataset.dataset, e);
-                    continue;
-                }
-            };
 
             let abcd_data = match abcd_parser.parse(&download.url,
                                                     &landing_page,

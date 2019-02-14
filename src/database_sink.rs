@@ -210,6 +210,8 @@ impl<'s> DatabaseSink<'s> {
 
         self.rename_constraints_and_indexes(&transaction)?;
 
+        self.create_listing_view(&transaction)?;
+
         transaction.commit()?;
 
         Ok(())
@@ -228,6 +230,10 @@ impl<'s> DatabaseSink<'s> {
         // translation table
         transaction.execute(&format!(
             "DROP TABLE IF EXISTS {}_translation;", &self.database_settings.dataset_table
+        ), &[])?;
+        // listing view
+        transaction.execute(&format!(
+            "DROP VIEW IF EXISTS {view_name};", view_name = self.database_settings.listing_view
         ), &[])?;
 
         Ok(())
@@ -318,6 +324,58 @@ impl<'s> DatabaseSink<'s> {
         );
         debug!("{}", &units_analyze_statement);
         self.connection.execute(&units_analyze_statement, &[])?;
+
+        Ok(())
+    }
+
+    /// Create view that provides a listing view
+    pub fn create_listing_view(&self,
+                               transaction: &Transaction) -> Result<(), Error> {
+        // TODO: replace full names with settings call
+        let mut hasher = sha1::Sha1::new();
+
+        hasher.update(b"/DataSets/DataSet/Metadata/Description/Representation/Title");
+        let dataset_name = hasher.digest().to_string();
+        hasher.reset();
+
+        hasher.update(b"/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal");
+        let latitude_column_hash = hasher.digest().to_string();
+        hasher.reset();
+
+        hasher.update(b"/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal");
+        let longitude_column_hash = hasher.digest().to_string();
+        hasher.reset();
+
+        let view_statement = format!(
+            r#"
+            CREATE VIEW {view_name} AS (
+            select link, dataset, file, provider, isGeoReferenced as available, isGeoReferenced
+            from (
+                   select {dataset_landing_page_column} as link,
+                          "{dataset_name}"              as dataset,
+                          {dataset_path_column}         as file,
+                          {dataset_provider_column}     as provider,
+                          (SELECT EXISTS(
+                              select * from {unit_table}
+                              where {dataset_table}.{dataset_id_column} = {unit_table}.{dataset_id_column}
+                                and "{latitude_column_hash}" is not null
+                                and "{longitude_column_hash}" is not null
+                            ))                 as isGeoReferenced
+                   from abcd_datasets
+            ) sub);"#,
+            view_name = self.database_settings.listing_view,
+            dataset_name = dataset_name,
+            dataset_landing_page_column = self.database_settings.dataset_landing_page_column,
+            dataset_path_column = self.database_settings.dataset_path_column,
+            dataset_provider_column = self.database_settings.dataset_provider_column,
+            dataset_table = self.database_settings.dataset_table,
+            unit_table = self.database_settings.unit_table,
+            dataset_id_column = self.database_settings.dataset_id_column,
+            latitude_column_hash = latitude_column_hash,
+            longitude_column_hash = longitude_column_hash,
+        );
+
+        transaction.execute(&view_statement, &[])?;
 
         Ok(())
     }
@@ -474,7 +532,6 @@ pub enum DatabaseSinkError {
     /// This error occurs when there is an inconsistency between the ABCD dataset data and the sink's columns.
     #[fail(display = "Inconsistent dataset columns: {}", 0)]
     InconsistentDatasetColumns(String),
-
     /// This error occurs when there is an inconsistency between the ABCD unit data and the sink's columns.
     #[fail(display = "Inconsistent unit columns: {}", 0)]
     InconsistentUnitColumns(String),

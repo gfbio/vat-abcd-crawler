@@ -1,3 +1,21 @@
+use std::fs::File;
+use std::path::Path;
+
+use clap::{crate_authors, crate_description, crate_version, App, Arg};
+use failure::Error;
+use log::{error, info, trace, warn};
+use simplelog::{CombinedLogger, SharedLogger, TermLogger, WriteLogger};
+
+use settings::Settings;
+
+use crate::abcd_fields::load_abcd_fields;
+use crate::abcd_parser::AbcdParser;
+use crate::archive_reader::ArchiveReader;
+use crate::bms_datasets::download_datasets;
+use crate::bms_datasets::load_bms_datasets;
+use crate::bms_providers::BmsProviders;
+use crate::database_sink::DatabaseSink;
+
 mod abcd_fields;
 mod abcd_parser;
 mod abcd_version;
@@ -8,42 +26,32 @@ mod database_sink;
 mod settings;
 mod vat_type;
 
-use clap::{App, Arg, crate_authors, crate_description, crate_version};
-use crate::abcd_fields::load_abcd_fields;
-use crate::abcd_parser::AbcdParser;
-use crate::archive_reader::ArchiveReader;
-use crate::bms_datasets::download_datasets;
-use crate::bms_datasets::load_bms_datasets;
-use crate::database_sink::DatabaseSink;
-use failure::Error;
-use log::{info, trace, warn, error};
-use settings::Settings;
-use simplelog::{CombinedLogger, SharedLogger, TermLogger, WriteLogger};
-use std::fs::File;
-use std::path::Path;
-use crate::bms_providers::load_bms_providers_as_map;
-
 fn main() {
     let matches = App::new("VAT ABCD Crawler")
         .version(crate_version!())
         .author(crate_authors!())
         .about(crate_description!())
-        .arg(Arg::with_name("settings")
-            .index(1)
-            .short("s")
-            .long("settings")
-            .value_name("SETTINGS")
-            .help("Specify the settings file")
-            .required(true)
-            .takes_value(true))
+        .arg(
+            Arg::with_name("settings")
+                .index(1)
+                .short("s")
+                .long("settings")
+                .value_name("SETTINGS")
+                .help("Specify the settings file")
+                .required(true)
+                .takes_value(true),
+        )
         .get_matches();
 
     let settings_path = Path::new(
-        matches.value_of("settings").expect("There must be a settings path specified.")
+        matches
+            .value_of("settings")
+            .expect("There must be a settings path specified."),
     );
     let settings = Settings::new(settings_path).expect("Unable to use config file.");
 
-    initialize_logger(Path::new(&settings.general.log_file), &settings).expect("Unable to initialize logger.");
+    initialize_logger(Path::new(&settings.general.log_file), &settings)
+        .expect("Unable to initialize logger.");
 
     let temp_dir = match tempfile::tempdir() {
         Ok(dir) => dir,
@@ -69,7 +77,7 @@ fn main() {
         }
     };
 
-    let bms_providers = match load_bms_providers_as_map(&settings.bms.provider_url) {
+    let bms_providers = match BmsProviders::from_url(&settings.bms.provider_url) {
         Ok(providers) => providers,
         Err(e) => {
             error!("Unable to download providers from BMS: {}", e);
@@ -88,8 +96,21 @@ fn main() {
     let mut abcd_parser = AbcdParser::new(&abcd_fields);
 
     for path_result in download_datasets(temp_dir.path(), &bms_datasets)
-        .skip(settings.debug.dataset_start.filter(|_| settings.general.debug).unwrap_or(std::usize::MIN))
-        .take(settings.debug.dataset_limit.filter(|_| settings.general.debug).unwrap_or(std::usize::MAX)) {
+        .skip(
+            settings
+                .debug
+                .dataset_start
+                .filter(|_| settings.general.debug)
+                .unwrap_or(std::usize::MIN),
+        )
+        .take(
+            settings
+                .debug
+                .dataset_limit
+                .filter(|_| settings.general.debug)
+                .unwrap_or(std::usize::MAX),
+        )
+    {
         let download = match path_result {
             Ok(d) => d,
             Err(e) => {
@@ -98,18 +119,24 @@ fn main() {
             }
         };
         trace!("Temp file: {}", download.path.display());
-        info!("Processing `{}` @ `{}` ({})",
-              download.dataset.dataset,
-              download.dataset.provider_datacenter,
-              download.dataset.get_latest_archive()
-                  .map(|archive| archive.xml_archive.as_str())
-                  .unwrap_or_else(|_| "-")
+        info!(
+            "Processing `{}` @ `{}` ({})",
+            download.dataset.dataset,
+            download.dataset.provider_datacenter,
+            download
+                .dataset
+                .get_latest_archive()
+                .map(|archive| archive.xml_archive.as_str())
+                .unwrap_or_else(|_| "-")
         );
 
         let bms_provider = match bms_providers.get(&download.dataset.provider_url) {
             Some(provider) => provider,
             None => {
-                warn!("Unable to retrieve BMS provider from map for {}", download.dataset.provider_url);
+                warn!(
+                    "Unable to retrieve BMS provider from map for {}",
+                    download.dataset.provider_url
+                );
                 continue;
             }
         };
@@ -117,12 +144,18 @@ fn main() {
         let landing_page = match download.dataset.get_landing_page(&settings, &bms_provider) {
             Ok(landing_page) => landing_page,
             Err(e) => {
-                warn!("Unable to generate landing page for {}; {}", download.dataset.dataset, e);
+                warn!(
+                    "Unable to generate landing page for {}; {}",
+                    download.dataset.dataset, e
+                );
                 continue;
             }
         };
 
-        for xml_bytes_result in ArchiveReader::from_path(&download.path).unwrap().bytes_iter() {
+        for xml_bytes_result in ArchiveReader::from_path(&download.path)
+            .unwrap()
+            .bytes_iter()
+        {
             let xml_bytes = match xml_bytes_result {
                 Ok(bytes) => bytes,
                 Err(e) => {
@@ -131,14 +164,16 @@ fn main() {
                 }
             };
 
-//            let mut string = String::from_utf8(xml_bytes).unwrap();
-//            string.truncate(200);
-//            dbg!(string);
+            //            let mut string = String::from_utf8(xml_bytes).unwrap();
+            //            string.truncate(200);
+            //            dbg!(string);
 
-            let abcd_data = match abcd_parser.parse(&download.url,
-                                                    &landing_page,
-                                                    &bms_provider.name,
-                                                    &xml_bytes) {
+            let abcd_data = match abcd_parser.parse(
+                &download.url,
+                &landing_page,
+                &bms_provider.name,
+                &xml_bytes,
+            ) {
                 Ok(data) => data,
                 Err(e) => {
                     warn!("Unable to retrieve ABCD data: {}", e);
@@ -147,9 +182,9 @@ fn main() {
             };
 
             trace!("{:?}", abcd_data.dataset);
-//            for unit in abcd_data.units {
-//                trace!("{:?}", unit);
-//            }
+            //            for unit in abcd_data.units {
+            //                trace!("{:?}", unit);
+            //            }
 
             match database_sink.insert_dataset(&abcd_data) {
                 Ok(_) => (),
@@ -179,9 +214,11 @@ fn initialize_logger(file_path: &Path, settings: &Settings) -> Result<(), Error>
     }
 
     if let Ok(file) = File::create(file_path) {
-        loggers.push(
-            WriteLogger::new(log_level, simplelog::Config::default(), file)
-        );
+        loggers.push(WriteLogger::new(
+            log_level,
+            simplelog::Config::default(),
+            file,
+        ));
     }
 
     CombinedLogger::init(loggers)?;

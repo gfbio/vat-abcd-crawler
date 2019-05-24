@@ -1,6 +1,6 @@
 use failure::Error;
-use std::collections::HashMap;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 /// This struct contains all provider information.
 /// The identifier is the `url`, strange as it seems.
@@ -13,23 +13,74 @@ pub struct BmsProvider {
     pub biocase_url: String,
 }
 
-/// This function downloads a list of providers from the BMS.
-pub fn load_bms_providers(url: &str) -> Result<Vec<BmsProvider>, Error> {
-    Ok(
-        reqwest::Client::new()
-            .get(url)
-            .send()?
-            .json()?
-    )
+#[derive(Debug)]
+pub struct BmsProviders {
+    providers: HashMap<String, BmsProvider>,
 }
 
-/// This function downloads the BMS providers and provides them
-/// as a map from `url`to `BmsProvider`.
-pub fn load_bms_providers_as_map(url: &str) -> Result<HashMap<String, BmsProvider>, Error> {
-    let providers = load_bms_providers(url)?;
-    Ok(
-        providers.into_iter()
+impl BmsProviders {
+    pub fn from_url(url: &str) -> Result<Self, Error> {
+        let providers: Vec<BmsProvider> = reqwest::Client::new().get(url).send()?.json()?;
+        let provider_map = providers
+            .into_iter()
             .map(|provider| (provider.url.clone(), provider))
-            .collect()
-    )
+            .collect();
+        Ok(Self {
+            providers: provider_map,
+        })
+    }
+
+    pub fn get(&self, url: &str) -> Option<&BmsProvider> {
+        self.providers.get(url)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockito::{mock, Mock};
+
+    #[test]
+    fn downloads_providers() {
+        let _webserver = create_json_webserver(r#"
+            [
+                {
+                    "id": "6",
+                    "shortname": "BGBM",
+                    "name": "Botanic Garden and Botanical Museum Berlin, Freie Universit\u00e4t Berlin",
+                    "url": "www.bgbm.org",
+                    "biocase_url": "https:\/\/ww3.bgbm.org\/biocase\/"
+                },
+                {
+                    "id": "5",
+                    "shortname": "DSMZ",
+                    "name": "Leibniz Institute DSMZ \u2013 German Collection of Microorganisms and Cell Cultures, Braunschweig",
+                    "url": "www.dsmz.de",
+                    "biocase_url": "http:\/\/biocase.dsmz.de\/wrappers\/biocase"
+                }
+            ]"#
+        );
+
+        let bms_providers = match BmsProviders::from_url(&mockito::server_url()) {
+            Ok(providers) => providers,
+            Err(error) => panic!(error),
+        };
+
+        let bgbm = bms_providers.get("www.bgbm.org");
+        assert!(bgbm.is_some());
+        assert_eq!(bgbm.unwrap().id, "6");
+
+        let dsmz = bms_providers.get("www.dsmz.de");
+        assert!(dsmz.is_some());
+        assert_eq!(dsmz.unwrap().id, "5");
+
+        assert!(bms_providers.get("").is_none());
+    }
+
+    fn create_json_webserver(json_string: &str) -> Mock {
+        mock("GET", "/")
+            .with_header("content-type", "application/json")
+            .with_body(json_string)
+            .create()
+    }
 }

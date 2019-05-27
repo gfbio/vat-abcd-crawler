@@ -8,7 +8,7 @@ use simplelog::{CombinedLogger, SharedLogger, TermLogger, WriteLogger};
 
 use settings::Settings;
 
-use crate::abcd_fields::load_abcd_fields;
+use crate::abcd_fields::AbcdFields;
 use crate::abcd_parser::AbcdParser;
 use crate::archive_reader::ArchiveReader;
 use crate::bms_datasets::download_datasets;
@@ -61,8 +61,8 @@ fn main() {
         }
     };
 
-    let abcd_fields = match load_abcd_fields(Path::new(&settings.abcd.fields_file)) {
-        Ok(map) => map,
+    let abcd_fields = match AbcdFields::from_path(Path::new(&settings.abcd.fields_file)) {
+        Ok(fields) => fields,
         Err(e) => {
             error!("Unable to load ABCD file: {}", e);
             return; // stop program

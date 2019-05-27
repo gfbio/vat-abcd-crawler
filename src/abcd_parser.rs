@@ -1,18 +1,20 @@
-use crate::abcd_fields::AbcdField;
-use crate::abcd_version::AbcdVersion;
-use crate::vat_type::VatType;
+use std::collections::HashMap;
+
 use failure::Error;
 use failure::Fail;
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use std::collections::HashMap;
+
+use crate::abcd_fields::AbcdFields;
+use crate::abcd_version::AbcdVersion;
+use crate::vat_type::VatType;
 
 pub type ValueMap = HashMap<String, VatType>;
 
 /// This parser processes ABCD XML files.
 #[derive(Debug)]
 pub struct AbcdParser<'a> {
-    abcd_fields: &'a HashMap<Vec<u8>, AbcdField>,
+    abcd_fields: &'a AbcdFields,
     abcd_version: AbcdVersion,
     xml_tag_path: Vec<u8>,
     xml_buffer: Vec<u8>,
@@ -21,7 +23,7 @@ pub struct AbcdParser<'a> {
 
 impl<'a> AbcdParser<'a> {
     /// Create a new `AbcdParser`.
-    pub fn new(abcd_fields: &'a HashMap<Vec<u8>, AbcdField>) -> Self {
+    pub fn new(abcd_fields: &'a AbcdFields) -> Self {
         Self {
             abcd_fields,
             abcd_version: AbcdVersion::Unknown,
@@ -32,11 +34,13 @@ impl<'a> AbcdParser<'a> {
     }
 
     /// Parse a binary XML file to `AbcdResult`s.
-    pub fn parse(&mut self,
-                 dataset_path: &str,
-                 landing_page: &str,
-                 provider_id: &str,
-                 xml_bytes: &[u8]) -> Result<AbcdResult, Error> {
+    pub fn parse(
+        &mut self,
+        dataset_path: &str,
+        landing_page: &str,
+        provider_id: &str,
+        xml_bytes: &[u8],
+    ) -> Result<AbcdResult, Error> {
         let mut xml_reader = Reader::from_reader(xml_bytes);
         xml_reader.trim_text(true);
 
@@ -49,7 +53,7 @@ impl<'a> AbcdParser<'a> {
                     self.xml_tag_path.push(b'/');
                     self.xml_tag_path.extend(Self::strip_tag(e.name()));
 
-//                    debug!("XML START: {}", String::from_utf8_lossy(&self.xml_tag_path));
+                    //                    debug!("XML START: {}", String::from_utf8_lossy(&self.xml_tag_path));
 
                     match self.xml_tag_path.as_slice() {
                         b"/DataSets" => {
@@ -67,13 +71,13 @@ impl<'a> AbcdParser<'a> {
                                 }
                             }
 
-//                            dbg!(&abcd_version);
+                            //                            dbg!(&abcd_version);
                         }
                         b"/DataSets/DataSet/Units" => {
-//                            eprintln!("Dataset Metadata:");
-//                            dbg!(&numeric_values);
-//                            dbg!(&textual_values);
-//                            dbg!(units);
+                            //                            eprintln!("Dataset Metadata:");
+                            //                            dbg!(&numeric_values);
+                            //                            dbg!(&textual_values);
+                            //                            dbg!(units);
 
                             dataset_data = Some(self.finish_map())
                         }
@@ -86,25 +90,24 @@ impl<'a> AbcdParser<'a> {
                     let tag: Vec<u8> = Self::strip_tag(e.name()).cloned().collect();
                     let stripped_name_length = tag.len();
 
-                    self.xml_tag_path.truncate(self.xml_tag_path.len() - stripped_name_length - SEPARATOR_LENGTH);
+                    self.xml_tag_path.truncate(
+                        self.xml_tag_path.len() - stripped_name_length - SEPARATOR_LENGTH,
+                    );
 
                     if self.xml_tag_path == b"/DataSets/DataSet/Units" && tag == b"Unit" {
-//                        eprintln!("Unit Data:");
-//                        dbg!(&numeric_values);
-//                        dbg!(&textual_values);
+                        //                        eprintln!("Unit Data:");
+                        //                        dbg!(&numeric_values);
+                        //                        dbg!(&textual_values);
 
                         units.push(self.finish_map());
                     }
                 }
                 Ok(Event::Text(ref e)) => {
-                    if let Some(abcd_field) = self.abcd_fields.get(&self.xml_tag_path) {
+                    if let Some(abcd_field) = self.abcd_fields.value_of(&self.xml_tag_path) {
                         if abcd_field.numeric {
                             let string = String::from_utf8_lossy(e.escaped());
                             if let Ok(number) = string.parse::<f64>() {
-                                self.values.insert(
-                                    abcd_field.name.clone(),
-                                    number.into(),
-                                );
+                                self.values.insert(abcd_field.name.clone(), number.into());
                             }
                         } else {
                             self.values.insert(
@@ -115,7 +118,11 @@ impl<'a> AbcdParser<'a> {
                     }
                 }
                 Ok(Event::Eof) => break, // exits the loop when reaching end of file
-                Err(e) => panic!("Error at position {}: {:?}", xml_reader.buffer_position(), e),
+                Err(e) => panic!(
+                    "Error at position {}: {:?}",
+                    xml_reader.buffer_position(),
+                    e
+                ),
                 _ => (), // ignore all other events
             }
 
@@ -152,7 +159,7 @@ impl<'a> AbcdParser<'a> {
     }
 
     /// Strip the namespace from a tag.
-    fn strip_tag(tag: &[u8]) -> impl Iterator<Item=&u8> {
+    fn strip_tag(tag: &[u8]) -> impl Iterator<Item = &u8> {
         let has_colon = tag.iter().any(|&b| b == b':');
         tag.iter()
             .skip_while(move |&&b| has_colon && b != b':')
@@ -171,11 +178,13 @@ pub struct AbcdResult {
 
 impl AbcdResult {
     /// This constructor creates a new `AbcdResult` from dataset and unit data.
-    pub fn new(dataset_path: String,
-               landing_page: String,
-               provider_id: String,
-               dataset_data: ValueMap,
-               units_data: Vec<ValueMap>) -> Self {
+    pub fn new(
+        dataset_path: String,
+        landing_page: String,
+        provider_id: String,
+        dataset_data: ValueMap,
+        units_data: Vec<ValueMap>,
+    ) -> Self {
         AbcdResult {
             dataset_path,
             landing_page,

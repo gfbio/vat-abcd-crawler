@@ -1,9 +1,11 @@
-use failure::Error;
-use std::path::Path;
+use std::collections::hash_map::Values;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
+use std::path::Path;
+
+use failure::Error;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// This struct reflect a field within the ABCD fields specification file.
 #[derive(Debug, Deserialize, Serialize)]
@@ -17,19 +19,132 @@ pub struct AbcdField {
     pub unit: String,
 }
 
-/// This function loads all `AbcdField`s from a given file path.
-/// It returns a map from the binary field name to the `AbcdField`.
-pub fn load_abcd_fields(path: &Path) -> Result<HashMap<Vec<u8>, AbcdField>, Error> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    Ok(fields_to_map(serde_json::from_reader(reader)?))
+type BinaryString = Vec<u8>;
+
+#[derive(Debug)]
+pub struct AbcdFields {
+    fields: HashMap<BinaryString, AbcdField>,
 }
 
-/// This function creates a map from binary field name to `AbcdField` from a list of `AbcdField`s.
-fn fields_to_map(fields: Vec<AbcdField>) -> HashMap<Vec<u8>, AbcdField> {
-    let mut map = HashMap::with_capacity(fields.len());
-    for field in fields {
-        map.insert(field.name.as_bytes().into(), field);
+impl AbcdFields {
+    pub fn from_path(path: &Path) -> Result<Self, Error> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        Ok(Self {
+            fields: Self::fields_to_map(serde_json::from_reader(reader)?),
+        })
     }
-    map
+
+    /// This function creates a map from binary field name to `AbcdField` from a list of `AbcdField`s.
+    fn fields_to_map(fields: Vec<AbcdField>) -> HashMap<Vec<u8>, AbcdField> {
+        let mut map = HashMap::with_capacity(fields.len());
+        for field in fields {
+            map.insert(field.name.as_bytes().into(), field);
+        }
+        map
+    }
+
+    pub fn value_of(&self, field: &[u8]) -> Option<&AbcdField> {
+        self.fields.get(field)
+    }
+
+    pub fn len(&self) -> usize {
+        self.fields.len()
+    }
+}
+
+impl<'a> IntoIterator for &'a AbcdFields {
+    type Item = &'a AbcdField;
+    type IntoIter = Values<'a, BinaryString, AbcdField>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.fields.values()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use tempfile::{NamedTempFile, TempPath};
+
+    use super::*;
+
+    #[test]
+    fn simple_file() {
+        let path = test_file_path();
+
+        let abcd_fields = AbcdFields::from_path(&path).expect("Unable to deserialize input.");
+
+        assert_eq!(abcd_fields.len(), 2);
+
+        let field1 = abcd_fields
+            .value_of(&b"/DataSets/DataSet/DatasetGUID".to_vec())
+            .expect("Field not found");
+        assert_eq!(field1.name, "/DataSets/DataSet/DatasetGUID");
+        assert_eq!(field1.numeric, false);
+        assert_eq!(field1.vat_mandatory, false);
+        assert_eq!(field1.gfbio_mandatory, false);
+        assert_eq!(field1.global_field, true);
+        assert!(field1.unit.is_empty());
+
+        let field2 = abcd_fields
+            .value_of(&b"/DataSets/DataSet/Units/Unit/SourceInstitutionID".to_vec())
+            .expect("Field not found");
+        assert_eq!(
+            field2.name,
+            "/DataSets/DataSet/Units/Unit/SourceInstitutionID"
+        );
+        assert_eq!(field2.numeric, false);
+        assert_eq!(field2.vat_mandatory, true);
+        assert_eq!(field2.gfbio_mandatory, true);
+        assert_eq!(field2.global_field, false);
+        assert_eq!(field2.unit, "TEST");
+    }
+
+    #[test]
+    fn iterate_values() {
+        let path = test_file_path();
+
+        let abcd_fields = AbcdFields::from_path(&path).expect("Unable to deserialize input.");
+
+        let mut number_of_fields = 0;
+        for _field in &abcd_fields {
+            number_of_fields += 1;
+        }
+
+        assert_eq!(number_of_fields, 2);
+    }
+
+    fn test_file_path() -> TempPath {
+        create_temp_file(
+            r#"[
+                {
+                    "name": "/DataSets/DataSet/DatasetGUID",
+                    "numeric": false,
+                    "vatMandatory": false,
+                    "gfbioMandatory": false,
+                    "globalField": true,
+                    "unit": ""
+                },
+                {
+                    "name": "/DataSets/DataSet/Units/Unit/SourceInstitutionID",
+                    "numeric": false,
+                    "vatMandatory": true,
+                    "gfbioMandatory": true,
+                    "globalField": false,
+                    "unit": "TEST"
+                }
+            ]"#,
+        )
+    }
+
+    fn create_temp_file(content: &str) -> TempPath {
+        let mut file = NamedTempFile::new().expect("Unable to create file to test.");
+
+        write!(file, "{}", content).expect("Unable to write content to test file.");
+
+        file.into_temp_path()
+    }
 }

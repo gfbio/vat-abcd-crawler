@@ -1,19 +1,22 @@
-use crate::abcd_fields::AbcdField;
-use crate::abcd_parser::AbcdResult;
-use crate::abcd_parser::ValueMap;
-use crate::settings;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+
+use csv::WriterBuilder;
 use failure::{Error, Fail};
 use log::debug;
 use postgres::params::ConnectParams;
 use postgres::params::Host;
 use postgres::tls::openssl::OpenSsl;
-use postgres::{Connection, TlsMode};
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use csv::WriterBuilder;
 use postgres::transaction::Transaction;
+use postgres::{Connection, TlsMode};
 
-const POSTGRES_CSV_CONFIGURATION: &str = "DELIMITER '\t', NULL '', QUOTE '\"', ESCAPE '\"', FORMAT CSV";
+use crate::abcd_fields::AbcdFields;
+use crate::abcd_parser::AbcdResult;
+use crate::abcd_parser::ValueMap;
+use crate::settings;
+
+const POSTGRES_CSV_CONFIGURATION: &str =
+    "DELIMITER '\t', NULL '', QUOTE '\"', ESCAPE '\"', FORMAT CSV";
 
 /// A PostgreSQL database DAO for storing datasets.
 pub struct DatabaseSink<'s> {
@@ -29,8 +32,10 @@ pub struct DatabaseSink<'s> {
 
 impl<'s> DatabaseSink<'s> {
     /// Create a new PostgreSQL database sink (DAO).
-    pub fn new(database_settings: &'s settings::Database,
-               abcd_fields: &HashMap<Vec<u8>, AbcdField>) -> Result<Self, Error> {
+    pub fn new(
+        database_settings: &'s settings::Database,
+        abcd_fields: &AbcdFields,
+    ) -> Result<Self, Error> {
         // create database connection params from the settings, including optional tls
         let negotiator = if database_settings.tls {
             Some(OpenSsl::new()?)
@@ -49,7 +54,7 @@ impl<'s> DatabaseSink<'s> {
         let mut unit_fields = Vec::new();
         let mut unit_fields_hash = Vec::new();
         let mut hasher = sha1::Sha1::new();
-        for field in abcd_fields.values() {
+        for field in abcd_fields {
             let hash = {
                 hasher.reset();
                 hasher.update(field.name.as_bytes());
@@ -88,7 +93,7 @@ impl<'s> DatabaseSink<'s> {
     }
 
     /// Initialize the temporary database schema.
-    fn initialize_temporary_schema(&mut self, abcd_fields: &HashMap<Vec<u8>, AbcdField>) -> Result<(), Error> {
+    fn initialize_temporary_schema(&mut self, abcd_fields: &AbcdFields) -> Result<(), Error> {
         self.drop_temporary_tables()?;
 
         self.create_temporary_dataset_table(abcd_fields)?;
@@ -103,11 +108,14 @@ impl<'s> DatabaseSink<'s> {
     /// Create and fill a temporary mapping table from hashes to field names.
     fn create_and_fill_temporary_mapping_table(&mut self) -> Result<(), Error> {
         // create table
-        self.connection.execute(&format!(
+        self.connection.execute(
+            &format!(
             "create table {schema}.{table}_translation (name text not null, hash text not null);",
             schema = self.database_settings.schema,
             table = self.database_settings.temp_dataset_table
-        ), &[])?;
+        ),
+            &[],
+        )?;
 
         // fill table
         let statement = self.connection.prepare(&format!(
@@ -126,16 +134,22 @@ impl<'s> DatabaseSink<'s> {
     }
 
     /// Create the temporary unit table
-    fn create_temporary_unit_table(&mut self, abcd_fields: &HashMap<Vec<u8>, AbcdField>) -> Result<(), Error> {
-        let mut fields = vec![
-            format!("{} int not null", self.database_settings.dataset_id_column),
-        ];
+    fn create_temporary_unit_table(&mut self, abcd_fields: &AbcdFields) -> Result<(), Error> {
+        let mut fields = vec![format!(
+            "{} int not null",
+            self.database_settings.dataset_id_column
+        )];
 
         for (field, hash) in self.unit_fields.iter().zip(&self.unit_fields_hash) {
-            let abcd_field = abcd_fields.get(field.as_bytes())
+            let abcd_field = abcd_fields
+                .value_of(field.as_bytes())
                 .ok_or_else(|| DatabaseSinkError::InconsistentUnitColumns(field.clone()))?;
 
-            let data_type_string = if abcd_field.numeric { "double precision" } else { "text" };
+            let data_type_string = if abcd_field.numeric {
+                "double precision"
+            } else {
+                "text"
+            };
 
             // TODO: enforce/filter not null
             // let null_string = if abcd_field.vat_mandatory { "NOT NULL" } else { "" }
@@ -144,30 +158,50 @@ impl<'s> DatabaseSink<'s> {
             fields.push(format!("\"{}\" {} {}", hash, data_type_string, null_string));
         }
 
-        self.connection.execute(&format!(
-            "CREATE TABLE {schema}.{table} ( {fields} );",
-            schema = &self.database_settings.schema,
-            table = self.database_settings.temp_unit_table,
-            fields = fields.join(",")
-        ), &[])?;
+        self.connection.execute(
+            &format!(
+                "CREATE TABLE {schema}.{table} ( {fields} );",
+                schema = &self.database_settings.schema,
+                table = self.database_settings.temp_unit_table,
+                fields = fields.join(",")
+            ),
+            &[],
+        )?;
 
         Ok(())
     }
 
     /// Create the temporary dataset table
-    fn create_temporary_dataset_table(&mut self, abcd_fields: &HashMap<Vec<u8>, AbcdField>) -> Result<(), Error> {
+    fn create_temporary_dataset_table(&mut self, abcd_fields: &AbcdFields) -> Result<(), Error> {
         let mut fields = vec![
-            format!("{} int primary key", self.database_settings.dataset_id_column), // id
-            format!("{} text not null", self.database_settings.dataset_path_column), // path
-            format!("{} text not null", self.database_settings.dataset_landing_page_column), // landing page
-            format!("{} text not null", self.database_settings.dataset_provider_column), // provider name
+            format!(
+                "{} int primary key",
+                self.database_settings.dataset_id_column
+            ), // id
+            format!(
+                "{} text not null",
+                self.database_settings.dataset_path_column
+            ), // path
+            format!(
+                "{} text not null",
+                self.database_settings.dataset_landing_page_column
+            ), // landing page
+            format!(
+                "{} text not null",
+                self.database_settings.dataset_provider_column
+            ), // provider name
         ];
 
         for (field, hash) in self.dataset_fields.iter().zip(&self.dataset_fields_hash) {
-            let abcd_field = abcd_fields.get(field.as_bytes())
+            let abcd_field = abcd_fields
+                .value_of(field.as_bytes())
                 .ok_or_else(|| DatabaseSinkError::InconsistentDatasetColumns(field.clone()))?;
 
-            let data_type_string = if abcd_field.numeric { "double precision" } else { "text" };
+            let data_type_string = if abcd_field.numeric {
+                "double precision"
+            } else {
+                "text"
+            };
 
             // TODO: enforce/filter not null
             // let null_string = if abcd_field.vat_mandatory { "NOT NULL" } else { "" }
@@ -176,12 +210,15 @@ impl<'s> DatabaseSink<'s> {
             fields.push(format!("\"{}\" {} {}", hash, data_type_string, null_string));
         }
 
-        self.connection.execute(&format!(
-            "CREATE TABLE {schema}.{table} ( {fields} );",
-            schema = &self.database_settings.schema,
-            table = self.database_settings.temp_dataset_table,
-            fields = fields.join(",")
-        ), &[])?;
+        self.connection.execute(
+            &format!(
+                "CREATE TABLE {schema}.{table} ( {fields} );",
+                schema = &self.database_settings.schema,
+                table = self.database_settings.temp_dataset_table,
+                fields = fields.join(",")
+            ),
+            &[],
+        )?;
 
         Ok(())
     }
@@ -190,17 +227,23 @@ impl<'s> DatabaseSink<'s> {
     fn drop_temporary_tables(&mut self) -> Result<(), Error> {
         for statement in &[
             // unit temp table
-            format!("DROP TABLE IF EXISTS {schema}.{table};",
-                    schema = &self.database_settings.schema,
-                    table = &self.database_settings.temp_unit_table),
+            format!(
+                "DROP TABLE IF EXISTS {schema}.{table};",
+                schema = &self.database_settings.schema,
+                table = &self.database_settings.temp_unit_table
+            ),
             // dataset temp table
-            format!("DROP TABLE IF EXISTS {schema}.{table};",
-                    schema = &self.database_settings.schema,
-                    table = &self.database_settings.temp_dataset_table),
+            format!(
+                "DROP TABLE IF EXISTS {schema}.{table};",
+                schema = &self.database_settings.schema,
+                table = &self.database_settings.temp_dataset_table
+            ),
             // translation temp table
-            format!("DROP TABLE IF EXISTS {schema}.{table}_translation;",
-                    schema = &self.database_settings.schema,
-                    table = &self.database_settings.temp_dataset_table),
+            format!(
+                "DROP TABLE IF EXISTS {schema}.{table}_translation;",
+                schema = &self.database_settings.schema,
+                table = &self.database_settings.temp_dataset_table
+            ),
         ] {
             self.connection.execute(statement, &[])?;
         }
@@ -216,7 +259,7 @@ impl<'s> DatabaseSink<'s> {
         let transaction = self.connection.transaction_with(
             postgres::transaction::Config::new()
                 .isolation_level(postgres::transaction::IsolationLevel::Serializable)
-                .read_only(false)
+                .read_only(false),
         )?;
 
         self.drop_old_tables(&transaction)?;
@@ -236,21 +279,29 @@ impl<'s> DatabaseSink<'s> {
     fn drop_old_tables(&self, transaction: &Transaction) -> Result<(), Error> {
         for statement in &[
             // listing view
-            format!("DROP VIEW IF EXISTS {schema}.{view_name};",
-                    schema = self.database_settings.schema,
-                    view_name = self.database_settings.listing_view),
+            format!(
+                "DROP VIEW IF EXISTS {schema}.{view_name};",
+                schema = self.database_settings.schema,
+                view_name = self.database_settings.listing_view
+            ),
             // unit table
-            format!("DROP TABLE IF EXISTS {schema}.{table};",
-                    schema = self.database_settings.schema,
-                    table = self.database_settings.unit_table),
+            format!(
+                "DROP TABLE IF EXISTS {schema}.{table};",
+                schema = self.database_settings.schema,
+                table = self.database_settings.unit_table
+            ),
             // dataset table
-            format!("DROP TABLE IF EXISTS {schema}.{table};",
-                    schema = self.database_settings.schema,
-                    table = self.database_settings.dataset_table),
+            format!(
+                "DROP TABLE IF EXISTS {schema}.{table};",
+                schema = self.database_settings.schema,
+                table = self.database_settings.dataset_table
+            ),
             // translation table
-            format!("DROP TABLE IF EXISTS {schema}.{table}_translation;",
-                    schema = self.database_settings.schema,
-                    table = self.database_settings.dataset_table),
+            format!(
+                "DROP TABLE IF EXISTS {schema}.{table}_translation;",
+                schema = self.database_settings.schema,
+                table = self.database_settings.dataset_table
+            ),
         ] {
             transaction.execute(statement, &[])?;
         }
@@ -262,20 +313,26 @@ impl<'s> DatabaseSink<'s> {
     fn rename_temporary_tables(&self, transaction: &Transaction) -> Result<(), Error> {
         for statement in &[
             // unit table
-            format!("ALTER TABLE {schema}.{temp_table} RENAME TO {table};",
-                    schema = self.database_settings.schema,
-                    temp_table = self.database_settings.temp_unit_table,
-                    table = self.database_settings.unit_table),
+            format!(
+                "ALTER TABLE {schema}.{temp_table} RENAME TO {table};",
+                schema = self.database_settings.schema,
+                temp_table = self.database_settings.temp_unit_table,
+                table = self.database_settings.unit_table
+            ),
             // dataset table
-            format!("ALTER TABLE {schema}.{temp_table} RENAME TO {table};",
-                    schema = self.database_settings.schema,
-                    temp_table = self.database_settings.temp_dataset_table,
-                    table = self.database_settings.dataset_table),
+            format!(
+                "ALTER TABLE {schema}.{temp_table} RENAME TO {table};",
+                schema = self.database_settings.schema,
+                temp_table = self.database_settings.temp_dataset_table,
+                table = self.database_settings.dataset_table
+            ),
             // translation table
-            format!("ALTER TABLE {schema}.{temp_table}_translation RENAME TO {table}_translation;",
-                    schema = self.database_settings.schema,
-                    temp_table = self.database_settings.temp_dataset_table,
-                    table = self.database_settings.dataset_table),
+            format!(
+                "ALTER TABLE {schema}.{temp_table}_translation RENAME TO {table}_translation;",
+                schema = self.database_settings.schema,
+                temp_table = self.database_settings.temp_dataset_table,
+                table = self.database_settings.dataset_table
+            ),
         ] {
             transaction.execute(statement, &[])?;
         }
@@ -287,19 +344,23 @@ impl<'s> DatabaseSink<'s> {
     fn rename_constraints_and_indexes(&self, transaction: &Transaction) -> Result<(), Error> {
         for statement in &[
             // foreign key
-            format!("ALTER TABLE {schema}.{table} \
-                     RENAME CONSTRAINT {temp_prefix}_{temp_suffix}_fk TO {prefix}_{suffix}_fk;",
-                    schema = &self.database_settings.schema,
-                    table = &self.database_settings.unit_table,
-                    temp_prefix = &self.database_settings.temp_unit_table,
-                    temp_suffix = &self.database_settings.dataset_id_column,
-                    prefix = &self.database_settings.unit_table,
-                    suffix = &self.database_settings.dataset_id_column),
+            format!(
+                "ALTER TABLE {schema}.{table} \
+                 RENAME CONSTRAINT {temp_prefix}_{temp_suffix}_fk TO {prefix}_{suffix}_fk;",
+                schema = &self.database_settings.schema,
+                table = &self.database_settings.unit_table,
+                temp_prefix = &self.database_settings.temp_unit_table,
+                temp_suffix = &self.database_settings.dataset_id_column,
+                prefix = &self.database_settings.unit_table,
+                suffix = &self.database_settings.dataset_id_column
+            ),
             // index
-            format!("ALTER INDEX {schema}.{temp_index}_idx RENAME TO {index}_idx;",
-                    schema = &self.database_settings.schema,
-                    temp_index = &self.database_settings.temp_unit_table,
-                    index = &self.database_settings.unit_table),
+            format!(
+                "ALTER INDEX {schema}.{temp_index}_idx RENAME TO {index}_idx;",
+                schema = &self.database_settings.schema,
+                temp_index = &self.database_settings.temp_unit_table,
+                index = &self.database_settings.unit_table
+            ),
         ] {
             transaction.execute(statement, &[])?;
         }
@@ -311,8 +372,8 @@ impl<'s> DatabaseSink<'s> {
     fn create_indexes_and_statistics(&mut self) -> Result<(), Error> {
         let foreign_key_statement = format!(
             "ALTER TABLE {schema}.{unit_table} \
-            ADD CONSTRAINT {unit_table}_{dataset_id}_fk \
-            FOREIGN KEY ({dataset_id}) REFERENCES {schema}.{dataset_table}({dataset_id});",
+             ADD CONSTRAINT {unit_table}_{dataset_id}_fk \
+             FOREIGN KEY ({dataset_id}) REFERENCES {schema}.{dataset_table}({dataset_id});",
             schema = &self.database_settings.schema,
             unit_table = &self.database_settings.temp_unit_table,
             dataset_id = &self.database_settings.dataset_id_column,
@@ -321,7 +382,10 @@ impl<'s> DatabaseSink<'s> {
         debug!("{}", &foreign_key_statement);
         self.connection.execute(&foreign_key_statement, &[])?;
         let mut hasher = sha1::Sha1::new();
-        let indexed_unit_column_names = self.database_settings.unit_indexed_columns.iter()
+        let indexed_unit_column_names = self
+            .database_settings
+            .unit_indexed_columns
+            .iter()
             .map(|field| {
                 hasher.reset();
                 hasher.update(field.as_bytes());
@@ -330,7 +394,7 @@ impl<'s> DatabaseSink<'s> {
             .collect::<Vec<String>>();
         let unit_index_statement = format!(
             "CREATE INDEX {unit_table}_idx ON {schema}.{unit_table} \
-            USING btree ({dataset_id}, \"{other}\");",
+             USING btree ({dataset_id}, \"{other}\");",
             schema = &self.database_settings.schema,
             unit_table = &self.database_settings.temp_unit_table,
             dataset_id = &self.database_settings.dataset_id_column,
@@ -364,8 +428,7 @@ impl<'s> DatabaseSink<'s> {
     }
 
     /// Create view that provides a listing view
-    pub fn create_listing_view(&self,
-                               transaction: &Transaction) -> Result<(), Error> {
+    pub fn create_listing_view(&self, transaction: &Transaction) -> Result<(), Error> {
         // TODO: replace full names with settings call
         let mut hasher = sha1::Sha1::new();
 
@@ -450,12 +513,14 @@ impl<'s> DatabaseSink<'s> {
     }
 
     /// Insert the dataset metadata into the temporary schema
-    fn insert_dataset_metadata(database_settings: &settings::Database,
-                               connection: &Connection,
-                               dataset_fields: &[String],
-                               dataset_fields_hash: &[String],
-                               abcd_data: &AbcdResult,
-                               id: u32) -> Result<(), Error> {
+    fn insert_dataset_metadata(
+        database_settings: &settings::Database,
+        connection: &Connection,
+        dataset_fields: &[String],
+        dataset_fields_hash: &[String],
+        abcd_data: &AbcdResult,
+        id: u32,
+    ) -> Result<(), Error> {
         let mut values = WriterBuilder::new()
             .terminator(csv::Terminator::Any(b'\n'))
             .delimiter(b'\t')
@@ -497,10 +562,7 @@ impl<'s> DatabaseSink<'s> {
         // dbg!(String::from_utf8_lossy(value_string.as_slice()));
 
         let statement = connection.prepare(&copy_statement)?;
-        statement.copy_in(
-            &[],
-            &mut value_string.as_slice(),
-        )?;
+        statement.copy_in(&[], &mut value_string.as_slice())?;
 
         Ok(())
     }
@@ -544,11 +606,8 @@ impl<'s> DatabaseSink<'s> {
         );
 
         let statement = self.connection.prepare(&copy_statement)?;
-//            dbg!(&value_string);
-        statement.copy_in(
-            &[],
-            &mut values.into_inner()?.as_slice(),
-        )?;
+        //            dbg!(&value_string);
+        statement.copy_in(&[], &mut values.into_inner()?.as_slice())?;
 
         Ok(())
     }

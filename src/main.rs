@@ -130,7 +130,7 @@ fn main() {
                 .unwrap_or_else(|_| "-")
         );
 
-        let bms_provider = match bms_providers.get(&download.dataset.provider_url) {
+        let bms_provider = match bms_providers.value_of(&download.dataset.provider_url) {
             Some(provider) => provider,
             None => {
                 warn!(

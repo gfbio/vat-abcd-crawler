@@ -30,7 +30,7 @@ impl BmsProviders {
         })
     }
 
-    pub fn get(&self, url: &str) -> Option<&BmsProvider> {
+    pub fn value_of(&self, url: &str) -> Option<&BmsProvider> {
         self.providers.get(url)
     }
 }
@@ -66,15 +66,15 @@ mod tests {
             Err(error) => panic!(error),
         };
 
-        let bgbm = bms_providers.get("www.bgbm.org");
+        let bgbm = bms_providers.value_of("www.bgbm.org");
         assert!(bgbm.is_some());
         assert_eq!(bgbm.unwrap().id, "6");
 
-        let dsmz = bms_providers.get("www.dsmz.de");
+        let dsmz = bms_providers.value_of("www.dsmz.de");
         assert!(dsmz.is_some());
         assert_eq!(dsmz.unwrap().id, "5");
 
-        assert!(bms_providers.get("").is_none());
+        assert!(bms_providers.value_of("").is_none());
     }
 
     fn create_json_webserver(json_string: &str) -> Mock {

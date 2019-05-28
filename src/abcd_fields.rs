@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn simple_file() {
-        let path = test_file_path();
+        let path = create_test_file_path();
 
         let abcd_fields = AbcdFields::from_path(&path).expect("Unable to deserialize input.");
 
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn iterate_values() {
-        let path = test_file_path();
+        let path = create_test_file_path();
 
         let abcd_fields = AbcdFields::from_path(&path).expect("Unable to deserialize input.");
 
@@ -117,7 +117,7 @@ mod tests {
         assert_eq!(number_of_fields, 2);
     }
 
-    fn test_file_path() -> TempPath {
+    fn create_test_file_path() -> TempPath {
         create_temp_file(
             r#"[
                 {

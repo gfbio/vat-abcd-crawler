@@ -1,8 +1,9 @@
-use config::Config;
-use config::File;
-use config::ConfigError;
-use serde::Deserialize;
 use std::path::Path;
+
+use config::Config;
+use config::ConfigError;
+use config::File;
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct General {
@@ -60,10 +61,36 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new(path: &Path) -> Result<Self, ConfigError> {
+    pub fn new(path: Option<&Path>) -> Result<Self, ConfigError> {
         let mut s = Config::new();
-        s.merge(File::from(path))?;
+        s.merge(File::from(Path::new("settings-default.toml")))?;
+        s.merge(File::from(Path::new("settings.toml")))?;
+        if let Some(path) = path {
+            s.merge(File::from(path))?;
+        }
 
         s.try_into()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::test_utils;
+
+    use super::*;
+
+    #[test]
+    fn load_file() {
+        let path = test_utils::create_temp_file_with_suffix(
+            ".toml",
+            r#"
+            [general]
+            debug = true
+            "#,
+        );
+
+        let settings = Settings::new(Some(&path)).expect("Unable to load settings.");
+
+        assert!(settings.general.debug);
     }
 }

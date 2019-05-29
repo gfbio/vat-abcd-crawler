@@ -199,3 +199,176 @@ impl AbcdResult {
 #[derive(Debug, Default, Fail)]
 #[fail(display = "ABCD file contains no dataset metadata.")]
 struct AbcdContainsNoDatasetMetadata {}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_utils;
+
+    use super::*;
+
+    const TECHNICAL_CONTACT_NAME: &str = "TECHNICAL CONTACT NAME";
+    const DESCRIPTION_TITLE: &str = "DESCRIPTION TITLE";
+    const UNIT_ID: &str = "UNIT ID";
+    const UNIT_LONGITUDE: f64 = 10.911;
+    const UNIT_LATITUDE: f64 = 49.911;
+    const UNIT_SPATIAL_DATUM: &str = "TECHNICAL WGS84 EMAIL";
+
+    #[test]
+    fn simple_file() {
+        let abcd_fields = create_abcd_fields();
+        let test_file = create_file_as_bytes();
+
+        let mut parser = AbcdParser::new(&abcd_fields);
+
+        let dataset_path = "dataset_path";
+        let landing_page = "landing_page";
+        let provider_id = "provider_id";
+
+        let result = parser
+            .parse(dataset_path, landing_page, provider_id, &test_file)
+            .expect("Unable to parse bytes");
+
+        assert_eq!(result.dataset_path, dataset_path);
+        assert_eq!(result.landing_page, landing_page);
+        assert_eq!(result.provider_id, provider_id);
+
+        assert_eq!(
+            Some(&VatType::Textual(TECHNICAL_CONTACT_NAME.into())),
+            result
+                .dataset
+                .get("/DataSets/DataSet/TechnicalContacts/TechnicalContact/Name")
+        );
+        assert_eq!(
+            Some(&VatType::Textual(DESCRIPTION_TITLE.into())),
+            result
+                .dataset
+                .get("/DataSets/DataSet/Metadata/Description/Representation/Title")
+        );
+
+        assert_eq!(result.units.len(), 1);
+
+        let unit = result.units.get(0).unwrap();
+
+        assert_eq!(
+            Some(&VatType::Textual(UNIT_ID.into())),
+            unit.get("/DataSets/DataSet/Units/Unit/UnitID")
+        );
+        assert_eq!(
+            Some(&VatType::Textual(UNIT_SPATIAL_DATUM.into())),
+            unit.get("/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/SpatialDatum")
+        );
+
+        if let (Some(&VatType::Numeric(longitude)), Some(&VatType::Numeric(latitude))) = (
+            unit.get("/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal"),
+            unit.get("/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal")
+        ) {
+            assert!(f64::abs(longitude - UNIT_LONGITUDE) < 0.01);
+            assert!(f64::abs(latitude - UNIT_LATITUDE) < 0.01);
+        }
+    }
+
+    fn create_file_as_bytes() -> Vec<u8> {
+        format!(
+            r#"
+            <?xml version="1.0" encoding="UTF-8"?>
+            <abcd:DataSets xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                           xmlns:abcd="http://www.tdwg.org/schemas/abcd/2.06"
+                           xsi:schemaLocation=" http://www.tdwg.org/schemas/abcd/2.06 http://rs.tdwg.org/abcd/2.06/ABCD_2.06.xsd">
+            <abcd:DataSet>
+                <abcd:TechnicalContacts>
+                    <abcd:TechnicalContact>
+                        <abcd:Name>{TECHNICAL_CONTACT_NAME}</abcd:Name>
+                    </abcd:TechnicalContact>
+                </abcd:TechnicalContacts>
+                <abcd:Metadata>
+                    <abcd:Description>
+                        <abcd:Representation language="en">
+                            <abcd:Title>{DESCRIPTION_TITLE}</abcd:Title>
+                        </abcd:Representation>
+                    </abcd:Description>
+                </abcd:Metadata>
+                <abcd:Units>
+                    <abcd:Unit>
+                        <abcd:UnitID>{UNIT_ID}</abcd:UnitID>
+                        <abcd:Gathering>
+                            <abcd:SiteCoordinateSets>
+                                <abcd:SiteCoordinates>
+                                    <abcd:CoordinatesLatLong>
+                                        <abcd:LongitudeDecimal>{UNIT_LONGITUDE}</abcd:LongitudeDecimal>
+                                        <abcd:LatitudeDecimal>{UNIT_LATITUDE}</abcd:LatitudeDecimal>
+                                        <abcd:SpatialDatum>{UNIT_SPATIAL_DATUM}</abcd:SpatialDatum>
+                                    </abcd:CoordinatesLatLong>
+                                </abcd:SiteCoordinates>
+                            </abcd:SiteCoordinateSets>
+                        </abcd:Gathering>
+                    </abcd:Unit>
+                </abcd:Units>
+            </abcd:DataSet>
+            </abcd:DataSets>
+            "#,
+            TECHNICAL_CONTACT_NAME = TECHNICAL_CONTACT_NAME,
+            DESCRIPTION_TITLE = DESCRIPTION_TITLE,
+            UNIT_ID = UNIT_ID,
+            UNIT_LONGITUDE = UNIT_LONGITUDE,
+            UNIT_LATITUDE = UNIT_LATITUDE,
+            UNIT_SPATIAL_DATUM = UNIT_SPATIAL_DATUM,
+        ).into_bytes()
+    }
+
+    fn create_abcd_fields() -> AbcdFields {
+        let fields_file = test_utils::create_temp_file(
+            r#"[
+                {
+                    "name": "/DataSets/DataSet/TechnicalContacts/TechnicalContact/Name",
+                    "numeric": false,
+                    "vatMandatory": false,
+                    "gfbioMandatory": true,
+                    "globalField": true,
+                    "unit": ""
+                },
+                {
+                    "name": "/DataSets/DataSet/Metadata/Description/Representation/Title",
+                    "numeric": false,
+                    "vatMandatory": false,
+                    "gfbioMandatory": true,
+                    "globalField": true,
+                    "unit": ""
+                },
+                {
+                    "name": "/DataSets/DataSet/Units/Unit/UnitID",
+                    "numeric": false,
+                    "vatMandatory": false,
+                    "gfbioMandatory": true,
+                    "globalField": false,
+                    "unit": ""
+                },
+                {
+                    "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal",
+                    "numeric": true,
+                    "vatMandatory": true,
+                    "gfbioMandatory": true,
+                    "globalField": false,
+                    "unit": "°"
+                },
+                {
+                    "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal",
+                    "numeric": true,
+                    "vatMandatory": true,
+                    "gfbioMandatory": true,
+                    "globalField": false,
+                    "unit": "°"
+                },
+                {
+                    "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/SpatialDatum",
+                    "numeric": false,
+                    "vatMandatory": false,
+                    "gfbioMandatory": true,
+                    "globalField": false,
+                    "unit": ""
+                }
+            ]"#,
+        );
+
+        AbcdFields::from_path(&fields_file).expect("Unable to create ABCD Fields Spec")
+    }
+}

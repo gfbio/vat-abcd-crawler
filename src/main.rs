@@ -11,55 +11,27 @@ use settings::Settings;
 use crate::abcd_fields::AbcdFields;
 use crate::abcd_parser::AbcdParser;
 use crate::archive_reader::ArchiveReader;
-use crate::bms_datasets::download_datasets;
-use crate::bms_datasets::load_bms_datasets;
-use crate::bms_providers::BmsProviders;
+use crate::bms::load_bms_datasets;
+use crate::bms::BmsProviders;
+use crate::bms::{download_datasets, BmsDataset};
 use crate::database_sink::DatabaseSink;
 
 mod abcd_fields;
 mod abcd_parser;
 mod abcd_version;
 mod archive_reader;
-mod bms_datasets;
-mod bms_providers;
+mod bms;
 mod database_sink;
 mod settings;
+#[cfg(test)]
+mod test_utils;
 mod vat_type;
 
 fn main() {
-    let matches = App::new("VAT ABCD Crawler")
-        .version(crate_version!())
-        .author(crate_authors!())
-        .about(crate_description!())
-        .arg(
-            Arg::with_name("settings")
-                .index(1)
-                .short("s")
-                .long("settings")
-                .value_name("SETTINGS")
-                .help("Specify the settings file")
-                .required(true)
-                .takes_value(true),
-        )
-        .get_matches();
-
-    let settings_path = Path::new(
-        matches
-            .value_of("settings")
-            .expect("There must be a settings path specified."),
-    );
-    let settings = Settings::new(settings_path).expect("Unable to use config file.");
+    let settings = initialize_settings().expect("Unable to load settings file.");
 
     initialize_logger(Path::new(&settings.general.log_file), &settings)
         .expect("Unable to initialize logger.");
-
-    let temp_dir = match tempfile::tempdir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            error!("Unable to create temporary directory: {}", e);
-            return; // stop program
-        }
-    };
 
     let abcd_fields = match AbcdFields::from_path(Path::new(&settings.abcd.fields_file)) {
         Ok(fields) => fields,
@@ -92,6 +64,26 @@ fn main() {
             return; // stop program
         }
     };
+
+    if let Err(e) = process_datasets(
+        &settings,
+        &abcd_fields,
+        &mut database_sink,
+        bms_providers,
+        &bms_datasets,
+    ) {
+        error!("Error processing datasets: {}", e);
+    };
+}
+
+fn process_datasets(
+    settings: &Settings,
+    abcd_fields: &AbcdFields,
+    database_sink: &mut DatabaseSink,
+    bms_providers: BmsProviders,
+    bms_datasets: &Vec<BmsDataset>,
+) -> Result<(), Error> {
+    let temp_dir = tempfile::tempdir()?;
 
     let mut abcd_parser = AbcdParser::new(&abcd_fields);
 
@@ -164,10 +156,6 @@ fn main() {
                 }
             };
 
-            //            let mut string = String::from_utf8(xml_bytes).unwrap();
-            //            string.truncate(200);
-            //            dbg!(string);
-
             let abcd_data = match abcd_parser.parse(
                 &download.url,
                 &landing_page,
@@ -182,9 +170,6 @@ fn main() {
             };
 
             trace!("{:?}", abcd_data.dataset);
-            //            for unit in abcd_data.units {
-            //                trace!("{:?}", unit);
-            //            }
 
             match database_sink.insert_dataset(&abcd_data) {
                 Ok(_) => (),
@@ -197,6 +182,30 @@ fn main() {
         Ok(_) => info!("Schema migration complete."),
         Err(e) => warn!("Unable to migrate schema: {}", e),
     };
+
+    Ok(())
+}
+
+fn initialize_settings() -> Result<Settings, Error> {
+    let matches = App::new("VAT ABCD Crawler")
+        .version(crate_version!())
+        .author(crate_authors!())
+        .about(crate_description!())
+        .arg(
+            Arg::with_name("settings")
+                .index(1)
+                .short("s")
+                .long("settings")
+                .value_name("SETTINGS")
+                .help("Specify the settings file")
+                .required(true)
+                .takes_value(true),
+        )
+        .get_matches();
+
+    let settings_path = matches.value_of("settings").map(Path::new);
+
+    Ok(Settings::new(settings_path)?)
 }
 
 /// Initialize the logger.

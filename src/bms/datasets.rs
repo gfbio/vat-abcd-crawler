@@ -1,4 +1,4 @@
-use crate::bms_providers::BmsProvider;
+use crate::bms::BmsProvider;
 use crate::settings::Settings;
 use failure::Error;
 use failure::Fail;

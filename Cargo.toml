@@ -11,7 +11,6 @@ config = { version = "0.9", features = ["toml"] }
 failure = "0.1"
 failure_derive = "0.1"
 log = "0.4"
-mockito = "0.17.1"
 postgres = { version = "0.15", features = ['with-openssl'] }
 quick-xml = "0.13"
 reqwest = "0.9"
@@ -21,3 +20,6 @@ sha1 = "0.6"
 simplelog = "0.5"
 tempfile = "3.0"
 zip = "0.5"
+
+[dev-dependencies]
+mockito = "0.17.1"

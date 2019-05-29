@@ -1,8 +1,8 @@
-use std::fmt;
 use std::borrow::Cow;
+use std::fmt;
 
 /// This enum represents the VAT data types.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum VatType {
     Textual(String),
     Numeric(f64),

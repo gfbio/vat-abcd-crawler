@@ -5,8 +5,7 @@ use failure::Fail;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use crate::abcd_fields::AbcdFields;
-use crate::abcd_version::AbcdVersion;
+use crate::abcd::{AbcdFields, AbcdVersion};
 use crate::vat_type::VatType;
 
 pub type ValueMap = HashMap<String, VatType>;

@@ -8,18 +8,11 @@ use simplelog::{CombinedLogger, SharedLogger, TermLogger, WriteLogger};
 
 use settings::Settings;
 
-use crate::abcd_fields::AbcdFields;
-use crate::abcd_parser::AbcdParser;
-use crate::archive_reader::ArchiveReader;
-use crate::bms::load_bms_datasets;
-use crate::bms::BmsProviders;
-use crate::bms::{download_datasets, BmsDataset};
+use crate::abcd::{AbcdFields, AbcdParser, ArchiveReader};
+use crate::bms::{download_datasets, load_bms_datasets, BmsDataset, BmsProviders};
 use crate::database_sink::DatabaseSink;
 
-mod abcd_fields;
-mod abcd_parser;
-mod abcd_version;
-mod archive_reader;
+mod abcd;
 mod bms;
 mod database_sink;
 mod settings;

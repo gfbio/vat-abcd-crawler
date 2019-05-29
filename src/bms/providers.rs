@@ -1,6 +1,7 @@
+use std::collections::HashMap;
+
 use failure::Error;
 use serde::Deserialize;
-use std::collections::HashMap;
 
 /// This struct contains all provider information.
 /// The identifier is the `url`, strange as it seems.
@@ -37,12 +38,13 @@ impl BmsProviders {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_utils;
+
     use super::*;
-    use mockito::{mock, Mock};
 
     #[test]
     fn downloads_providers() {
-        let _webserver = create_json_webserver(r#"
+        let _webserver = test_utils::create_json_webserver(r#"
             [
                 {
                     "id": "6",
@@ -61,7 +63,7 @@ mod tests {
             ]"#
         );
 
-        let bms_providers = match BmsProviders::from_url(&mockito::server_url()) {
+        let bms_providers = match BmsProviders::from_url(&test_utils::webserver_url()) {
             Ok(providers) => providers,
             Err(error) => panic!(error),
         };
@@ -77,10 +79,4 @@ mod tests {
         assert!(bms_providers.value_of("").is_none());
     }
 
-    fn create_json_webserver(json_string: &str) -> Mock {
-        mock("GET", "/")
-            .with_header("content-type", "application/json")
-            .with_body(json_string)
-            .create()
-    }
 }

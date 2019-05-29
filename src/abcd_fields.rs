@@ -65,9 +65,9 @@ impl<'a> IntoIterator for &'a AbcdFields {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use tempfile::TempPath;
 
-    use tempfile::{NamedTempFile, TempPath};
+    use crate::test_utils;
 
     use super::*;
 
@@ -118,7 +118,7 @@ mod tests {
     }
 
     fn create_test_file_path() -> TempPath {
-        create_temp_file(
+        test_utils::create_temp_file(
             r#"[
                 {
                     "name": "/DataSets/DataSet/DatasetGUID",
@@ -138,13 +138,5 @@ mod tests {
                 }
             ]"#,
         )
-    }
-
-    fn create_temp_file(content: &str) -> TempPath {
-        let mut file = NamedTempFile::new().expect("Unable to create file to test.");
-
-        write!(file, "{}", content).expect("Unable to write content to test file.");
-
-        file.into_temp_path()
     }
 }

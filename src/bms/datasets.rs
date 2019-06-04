@@ -1,15 +1,17 @@
-use crate::bms::BmsProvider;
-use crate::settings::Settings;
-use failure::Error;
-use failure::Fail;
-use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 use std::path::PathBuf;
 
+use failure::Error;
+use failure::Fail;
+use serde::{Deserialize, Serialize};
+
+use crate::bms::BmsProvider;
+use crate::settings::Settings;
+
 /// This struct contains dataset information from the BMS
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct BmsDataset {
     pub provider_datacenter: String,
     pub provider_url: String,
@@ -19,7 +21,7 @@ pub struct BmsDataset {
 }
 
 /// This struct contains archive download information for a BMS dataset.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct BmsXmlArchive {
     pub id: String,
     pub xml_archive: String,
@@ -127,4 +129,116 @@ pub fn download_dataset(
     std::io::copy(&mut response, &mut writer)?;
 
     Ok(DownloadedBmsDataset::new(dataset, download_file_path, url))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+
+    use crate::test_utils;
+
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn download_dataset_metadata() {
+        let bms_provider_datacenter = "provider_datacenter";
+        let bms_provider_url = "provider_url";
+        let bms_dsa = "dsa";
+        let bms_dataset = "dataset";
+        let xml_archive_id = "xml_archive_id";
+        let xml_archive_xml_archive = "xml_archive_xml_archive";
+        let xml_archive_latest = true;
+
+        let _webserver = test_utils::create_json_webserver(&format!(
+            r#"
+            [
+                {{
+                    "provider_datacenter": "{provider_datacenter}",
+                    "provider_url": "{provider_url}",
+                    "dsa": "{dsa}",
+                    "dataset": "{dataset}",
+                    "xml_archives": [
+                        {{
+                            "id": "{xml_archive_id}",
+                            "xml_archive": "{xml_archive_xml_archive}",
+                            "latest": {xml_archive_latest}
+                        }}
+                    ]
+                }}
+            ]
+            "#,
+            provider_datacenter = bms_provider_datacenter,
+            provider_url = bms_provider_url,
+            dsa = bms_dsa,
+            dataset = bms_dataset,
+            xml_archive_id = xml_archive_id,
+            xml_archive_xml_archive = xml_archive_xml_archive,
+            xml_archive_latest = xml_archive_latest,
+        ));
+
+        let datasets = load_bms_datasets(&test_utils::webserver_url()).unwrap();
+
+        assert_eq!(datasets.len(), 1);
+
+        let dataset = datasets.get(0).unwrap();
+
+        assert_eq!(dataset.provider_datacenter, bms_provider_datacenter);
+        assert_eq!(dataset.provider_url, bms_provider_url);
+        assert_eq!(dataset.dsa, bms_dsa);
+        assert_eq!(dataset.dataset, bms_dataset);
+
+        let latest_archive = dataset.get_latest_archive().unwrap();
+
+        assert_eq!(latest_archive.id, xml_archive_id);
+        assert_eq!(latest_archive.xml_archive, xml_archive_xml_archive);
+        assert_eq!(latest_archive.latest, xml_archive_latest);
+    }
+
+    #[test]
+    fn retrieve_a_landing_page() {
+        unimplemented!();
+    }
+
+    #[test]
+    fn download_a_dataset() {
+        let bms_provider_datacenter = "provider_datacenter";
+        let bms_provider_url = "provider_url";
+        let bms_dsa = "dsa";
+        let bms_dataset = "dataset";
+        let xml_archive_id = "xml_archive_id";
+        let xml_archive_xml_archive = "xml_archive_xml_archive";
+        let xml_archive_latest = true;
+
+        let test_file = "abcde";
+
+        let temp_file = NamedTempFile::new().unwrap().into_temp_path();
+
+        let _webserver = test_utils::create_json_webserver(test_file);
+        let webserver_url = test_utils::webserver_url();
+
+        let bms_dataset = BmsDataset {
+            provider_datacenter: bms_provider_datacenter.into(),
+            provider_url: bms_provider_url.into(),
+            dsa: bms_dsa.into(),
+            dataset: bms_dataset.into(),
+            xml_archives: vec![BmsXmlArchive {
+                id: xml_archive_id.into(),
+                xml_archive: xml_archive_xml_archive.into(),
+                latest: xml_archive_latest,
+            }],
+        };
+
+        let downloaded_dataset =
+            download_dataset(webserver_url.clone(), temp_file.to_path_buf(), &bms_dataset).unwrap();
+
+        assert_eq!(downloaded_dataset.dataset, &bms_dataset);
+        assert_eq!(downloaded_dataset.url, webserver_url);
+
+        let mut bytes = Vec::new();
+        let mut file = File::open(downloaded_dataset.path).unwrap();
+        file.read_to_end(&mut bytes).unwrap();
+
+        assert_eq!(String::from_utf8(bytes).unwrap().as_str(), test_file);
+    }
 }

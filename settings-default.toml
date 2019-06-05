@@ -9,10 +9,12 @@ dataset_limit = 3
 [abcd]
 fields_file = "abcd-fields.json"
 
-[bms]
-monitor_url = "http://bms.gfbio.org/services/xml-archives/?provider=&dsa="
-provider_url = "https://bms.gfbio.org/services/providers/?provider=&name="
-landing_page_url = "http://bms.gfbio.org/services/landingpages/?output=json"
+[pangaea]
+search_url = "https://ws.pangaea.de/es/dataportal-gfbio/pansimple/_search"
+scroll_url = "https://ws.pangaea.de/es/dataportal-gfbio/pansimple/_search/scroll"
+
+[terminology_service]
+landingpage_url = "https://terminologies.gfbio.org/tools/landingpages/landingpage.php"
 
 [database]
 host = "localhost"

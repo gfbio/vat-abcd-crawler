@@ -13,8 +13,8 @@ use crate::bms::{download_datasets, load_bms_datasets, BmsDataset, BmsProviders}
 use crate::database_sink::DatabaseSink;
 
 mod abcd;
-mod bms;
 mod database_sink;
+mod pangaea;
 mod settings;
 #[cfg(test)]
 mod test_utils;

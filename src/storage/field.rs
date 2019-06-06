@@ -9,7 +9,7 @@ impl Field {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.into(),
-            hash: Sha1::from(name).digest().to_string(),
+            hash: Sha1::from(name.as_bytes()).digest().to_string(),
         }
     }
 }

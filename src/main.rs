@@ -9,18 +9,20 @@ use simplelog::{CombinedLogger, SharedLogger, TermLogger, WriteLogger};
 use settings::Settings;
 
 use crate::abcd::{AbcdFields, AbcdParser, ArchiveReader};
-use crate::bms::{download_datasets, load_bms_datasets, BmsDataset, BmsProviders};
 use crate::database_sink::DatabaseSink;
+use crate::file_downloader::FileDownloader;
+use crate::pangaea::{PangaeaSearchResult, PangaeaSearchResultEntry};
 
 mod abcd;
 mod database_sink;
+mod file_downloader;
 mod pangaea;
 mod settings;
 #[cfg(test)]
 mod test_utils;
 mod vat_type;
 
-fn main() {
+fn main() -> Result<(), Error> {
     let settings = initialize_settings().expect("Unable to load settings file.");
 
     initialize_logger(Path::new(&settings.general.log_file), &settings)
@@ -30,7 +32,7 @@ fn main() {
         Ok(fields) => fields,
         Err(e) => {
             error!("Unable to load ABCD file: {}", e);
-            return; // stop program
+            return Err(e); // stop program
         }
     };
 
@@ -38,49 +40,37 @@ fn main() {
         Ok(sink) => sink,
         Err(e) => {
             error!("Unable to create database sink: {}", e);
-            return; // stop program
+            return Err(e); // stop program
         }
     };
 
-    let bms_providers = match BmsProviders::from_url(&settings.bms.provider_url) {
-        Ok(providers) => providers,
+    let datasets = match PangaeaSearchResult::retrieve_all_entries(&settings.pangaea) {
+        Ok(search_entries) => search_entries,
         Err(e) => {
-            error!("Unable to download providers from BMS: {}", e);
-            return; // stop program
+            error!("Unable to download dataset metadata from Pangaea: {}", e);
+            return Err(e); // stop program
         }
     };
 
-    let bms_datasets = match load_bms_datasets(&settings.bms.monitor_url) {
-        Ok(datasets) => datasets,
-        Err(e) => {
-            error!("Unable to download datasets from BMS: {}", e);
-            return; // stop program
-        }
-    };
-
-    if let Err(e) = process_datasets(
-        &settings,
-        &abcd_fields,
-        &mut database_sink,
-        bms_providers,
-        &bms_datasets,
-    ) {
+    if let Err(e) = process_datasets(&settings, &abcd_fields, &mut database_sink, &datasets) {
         error!("Error processing datasets: {}", e);
     };
+
+    Ok(())
 }
 
 fn process_datasets(
     settings: &Settings,
     abcd_fields: &AbcdFields,
     database_sink: &mut DatabaseSink,
-    bms_providers: BmsProviders,
-    bms_datasets: &Vec<BmsDataset>,
+    datasets: &[PangaeaSearchResultEntry],
 ) -> Result<(), Error> {
     let temp_dir = tempfile::tempdir()?;
 
     let mut abcd_parser = AbcdParser::new(&abcd_fields);
 
-    for path_result in download_datasets(temp_dir.path(), &bms_datasets)
+    for dataset in datasets
+        .iter()
         .skip(
             settings
                 .debug
@@ -96,51 +86,24 @@ fn process_datasets(
                 .unwrap_or(std::usize::MAX),
         )
     {
-        let download = match path_result {
-            Ok(d) => d,
-            Err(e) => {
-                warn!("Unable to download file: {}", e);
-                continue;
-            }
-        };
-        trace!("Temp file: {}", download.path.display());
+        let file_path = temp_dir.path().join(dataset.id()).join(".zip");
+        if let Err(e) = FileDownloader::from_url(dataset.download_url()).to_path(&file_path) {
+            warn!("Unable to download file: {}", e);
+            continue;
+        }
+
+        trace!("Temp file: {}", file_path.display());
         info!(
             "Processing `{}` @ `{}` ({})",
-            download.dataset.dataset,
-            download.dataset.provider_datacenter,
-            download
-                .dataset
-                .get_latest_archive()
-                .map(|archive| archive.xml_archive.as_str())
-                .unwrap_or_else(|_| "-")
+            dataset.id(),
+            dataset.publisher(),
+            dataset.download_url(),
         );
 
-        let bms_provider = match bms_providers.value_of(&download.dataset.provider_url) {
-            Some(provider) => provider,
-            None => {
-                warn!(
-                    "Unable to retrieve BMS provider from map for {}",
-                    download.dataset.provider_url
-                );
-                continue;
-            }
-        };
+        // TODO: generate landing page url
+        let landing_page_url: String = String::new();
 
-        let landing_page = match download.dataset.get_landing_page(&settings, &bms_provider) {
-            Ok(landing_page) => landing_page,
-            Err(e) => {
-                warn!(
-                    "Unable to generate landing page for {}; {}",
-                    download.dataset.dataset, e
-                );
-                continue;
-            }
-        };
-
-        for xml_bytes_result in ArchiveReader::from_path(&download.path)
-            .unwrap()
-            .bytes_iter()
-        {
+        for xml_bytes_result in ArchiveReader::from_path(&file_path).unwrap().bytes_iter() {
             let xml_bytes = match xml_bytes_result {
                 Ok(bytes) => bytes,
                 Err(e) => {
@@ -150,9 +113,9 @@ fn process_datasets(
             };
 
             let abcd_data = match abcd_parser.parse(
-                &download.url,
-                &landing_page,
-                &bms_provider.name,
+                dataset.download_url(),
+                &landing_page_url,
+                &dataset.publisher(),
                 &xml_bytes,
             ) {
                 Ok(data) => data,

@@ -1,36 +1,37 @@
+use crate::settings::Pangaea;
 use failure::Error;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
-pub struct SearchResult {
+pub struct PangaeaSearchResult {
     #[serde(rename = "_scroll_id")]
     scroll_id: String,
-    hits: SearchResultHits,
+    hits: PangaeaSearchResultHits,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
-struct SearchResultHits {
+struct PangaeaSearchResultHits {
     total: u64,
-    hits: Vec<SearchResultEntry>,
+    hits: Vec<PangaeaSearchResultEntry>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
-pub struct SearchResultEntry {
+pub struct PangaeaSearchResultEntry {
     #[serde(rename = "_id")]
     id: String,
     #[serde(rename = "_source")]
-    source: SearchResultEntrySource,
+    source: PangaeaSearchResultEntrySource,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
-struct SearchResultEntrySource {
+struct PangaeaSearchResultEntrySource {
     citation_publisher: String,
     datalink: String,
 }
 
-impl SearchResult {
+impl PangaeaSearchResult {
     const SCROLL_TIMEOUT: &'static str = "1m";
 
     fn from_url(url: &str) -> Result<Self, Error> {
@@ -84,17 +85,16 @@ impl SearchResult {
     }
 
     pub fn retrieve_all_entries(
-        query_url: &str,
-        scroll_url: &str,
-    ) -> Result<Vec<SearchResultEntry>, Error> {
+        pangaea_settings: &Pangaea,
+    ) -> Result<Vec<PangaeaSearchResultEntry>, Error> {
         let mut entries = Vec::new();
 
-        let mut result = Self::from_url(query_url)?;
+        let mut result = Self::from_url(&pangaea_settings.search_url)?;
 
         while result.hits.total > 0 {
             entries.append(&mut result.hits.hits);
 
-            result = Self::from_scroll_url(scroll_url, &result.scroll_id)?;
+            result = Self::from_scroll_url(&pangaea_settings.scroll_url, &result.scroll_id)?;
         }
 
         entries.append(&mut result.hits.hits);
@@ -103,7 +103,7 @@ impl SearchResult {
     }
 }
 
-impl SearchResultEntry {
+impl PangaeaSearchResultEntry {
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -178,14 +178,14 @@ mod tests {
 
     #[test]
     fn parse_search_result_entry_source() {
-        let search_result_entry_source = serde_json::from_str::<SearchResultEntrySource>(
+        let search_result_entry_source = serde_json::from_str::<PangaeaSearchResultEntrySource>(
             &SEARCH_RESULT_ENTRY_SOURCE_JSON().to_string(),
         )
         .unwrap();
 
         assert_eq!(
             search_result_entry_source,
-            SearchResultEntrySource {
+            PangaeaSearchResultEntrySource {
                 citation_publisher: CITATION_PUBLISHER.into(),
                 datalink: DATALINK.into(),
             }
@@ -194,15 +194,16 @@ mod tests {
 
     #[test]
     fn parse_search_result_entry() {
-        let search_result_entry =
-            serde_json::from_str::<SearchResultEntry>(&SEARCH_RESULT_ENTRY_JSON().to_string())
-                .unwrap();
+        let search_result_entry = serde_json::from_str::<PangaeaSearchResultEntry>(
+            &SEARCH_RESULT_ENTRY_JSON().to_string(),
+        )
+        .unwrap();
 
         assert_eq!(
             search_result_entry,
-            SearchResultEntry {
+            PangaeaSearchResultEntry {
                 id: RESULT_ID.to_string(),
-                source: SearchResultEntrySource {
+                source: PangaeaSearchResultEntrySource {
                     citation_publisher: CITATION_PUBLISHER.into(),
                     datalink: DATALINK.into(),
                 },
@@ -213,24 +214,24 @@ mod tests {
     #[test]
     fn parse_search_result_hits() {
         let search_result_hits =
-            serde_json::from_str::<SearchResultHits>(&SEARCH_RESULT_HITS_JSON().to_string())
+            serde_json::from_str::<PangaeaSearchResultHits>(&SEARCH_RESULT_HITS_JSON().to_string())
                 .unwrap();
 
         assert_eq!(
             search_result_hits,
-            SearchResultHits {
+            PangaeaSearchResultHits {
                 total: SEARCH_RESULT_HITS,
                 hits: vec![
-                    SearchResultEntry {
+                    PangaeaSearchResultEntry {
                         id: RESULT_ID.to_string(),
-                        source: SearchResultEntrySource {
+                        source: PangaeaSearchResultEntrySource {
                             citation_publisher: CITATION_PUBLISHER.into(),
                             datalink: DATALINK.into(),
                         },
                     },
-                    SearchResultEntry {
+                    PangaeaSearchResultEntry {
                         id: RESULT_ID_2.to_string(),
-                        source: SearchResultEntrySource {
+                        source: PangaeaSearchResultEntrySource {
                             citation_publisher: CITATION_PUBLISHER_2.into(),
                             datalink: DATALINK_2.into(),
                         },
@@ -243,7 +244,7 @@ mod tests {
     #[test]
     fn parse_search_result() {
         let search_result =
-            serde_json::from_str::<SearchResult>(&SEARCH_RESULT_JSON().to_string()).unwrap();
+            serde_json::from_str::<PangaeaSearchResult>(&SEARCH_RESULT_JSON().to_string()).unwrap();
 
         assert_eq!(search_result.scroll_id, SCROLL_ID);
         assert_eq!(search_result.hits.hits.len(), 2);
@@ -252,12 +253,12 @@ mod tests {
     #[test]
     fn parse_webserver_result() {
         let webserver = MockWebserver::from_json(
-            &format!("/?scroll={}", SearchResult::SCROLL_TIMEOUT),
+            &format!("/?scroll={}", PangaeaSearchResult::SCROLL_TIMEOUT),
             "POST",
             &SEARCH_RESULT_JSON().to_string(),
         );
 
-        let search_result = SearchResult::from_url(&webserver.webserver_root_url()).unwrap();
+        let search_result = PangaeaSearchResult::from_url(&webserver.webserver_root_url()).unwrap();
 
         assert_eq!(search_result.scroll_id, SCROLL_ID);
         assert_eq!(search_result.hits.hits.len(), 2);
@@ -268,7 +269,8 @@ mod tests {
         let webserver = MockWebserver::from_json("/", "POST", &SEARCH_RESULT_JSON().to_string());
 
         let search_result =
-            SearchResult::from_scroll_url(&webserver.webserver_root_url(), SCROLL_ID).unwrap();
+            PangaeaSearchResult::from_scroll_url(&webserver.webserver_root_url(), SCROLL_ID)
+                .unwrap();
 
         assert_eq!(search_result.scroll_id, SCROLL_ID);
         assert_eq!(search_result.hits.hits.len(), 2);
@@ -282,7 +284,7 @@ mod tests {
             "/scroll",
             "POST",
             &json!({
-              "scroll" : SearchResult::SCROLL_TIMEOUT,
+              "scroll" : PangaeaSearchResult::SCROLL_TIMEOUT,
               "scroll_id" : SCROLL_ID,
             })
             .to_string(),
@@ -303,7 +305,7 @@ mod tests {
             "/scroll",
             "POST",
             &json!({
-              "scroll" : SearchResult::SCROLL_TIMEOUT,
+              "scroll" : PangaeaSearchResult::SCROLL_TIMEOUT,
               "scroll_id" : SCROLL_ID_2,
             })
             .to_string(),
@@ -322,10 +324,10 @@ mod tests {
 
         assert_eq!(_m2.webserver_root_url(), _m3.webserver_root_url());
 
-        let entries = SearchResult::retrieve_all_entries(
-            &_m1.webserver_root_url(),
-            &format!("{}/scroll", _m2.webserver_root_url()),
-        )
+        let entries = PangaeaSearchResult::retrieve_all_entries(&Pangaea {
+            search_url: _m1.webserver_root_url(),
+            scroll_url: format!("{}/scroll", _m2.webserver_root_url()),
+        })
         .unwrap();
 
         assert_eq!(5, entries.len());

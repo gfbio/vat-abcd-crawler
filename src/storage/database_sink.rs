@@ -12,29 +12,28 @@ use postgres::{Connection, TlsMode};
 
 use crate::abcd::{AbcdFields, AbcdResult, ValueMap};
 use crate::settings;
+use crate::storage::Field;
 
 const POSTGRES_CSV_CONFIGURATION: &str =
     "DELIMITER '\t', NULL '', QUOTE '\"', ESCAPE '\"', FORMAT CSV";
 
-/// A PostgreSQL database DAO for storing datasets.
+/// A PostgreSQL storage DAO for storing datasets.
 pub struct DatabaseSink<'s> {
     connection: Connection,
-    database_settings: &'s settings::Database,
-    dataset_fields: Vec<String>,
-    dataset_fields_hash: Vec<String>,
+    database_settings: &'s settings::DatabaseSettings,
+    dataset_fields: Vec<Field>,
     datasets_to_ids: HashMap<String, u32>,
     next_dataset_id: u32,
-    unit_fields: Vec<String>,
-    unit_fields_hash: Vec<String>,
+    unit_fields: Vec<Field>,
 }
 
 impl<'s> DatabaseSink<'s> {
-    /// Create a new PostgreSQL database sink (DAO).
+    /// Create a new PostgreSQL storage sink (DAO).
     pub fn new(
-        database_settings: &'s settings::Database,
+        database_settings: &'s settings::DatabaseSettings,
         abcd_fields: &AbcdFields,
     ) -> Result<Self, Error> {
-        // create database connection params from the settings, including optional tls
+        // create storage connection params from the settings, including optional tls
         let negotiator = if database_settings.tls {
             Some(OpenSsl::new()?)
         } else {
@@ -46,24 +45,14 @@ impl<'s> DatabaseSink<'s> {
             .database(&database_settings.database)
             .build(Host::Tcp(database_settings.host.clone()));
 
-        // fill lists of dataset and unit fields and give them a fixed order for the database inserts
+        // fill lists of dataset and unit fields and give them a fixed order for the storage inserts
         let mut dataset_fields = Vec::new();
-        let mut dataset_fields_hash = Vec::new();
         let mut unit_fields = Vec::new();
-        let mut unit_fields_hash = Vec::new();
-        let mut hasher = sha1::Sha1::new();
         for field in abcd_fields {
-            let hash = {
-                hasher.reset();
-                hasher.update(field.name.as_bytes());
-                hasher.digest().to_string()
-            };
             if field.global_field {
-                dataset_fields.push(field.name.clone());
-                dataset_fields_hash.push(hash);
+                dataset_fields.push(field.name.as_str().into());
             } else {
-                unit_fields.push(field.name.clone());
-                unit_fields_hash.push(hash);
+                unit_fields.push(field.name.as_str().into());
             }
         }
 
@@ -78,11 +67,9 @@ impl<'s> DatabaseSink<'s> {
             )?,
             database_settings,
             dataset_fields,
-            dataset_fields_hash,
             datasets_to_ids: HashMap::new(),
             next_dataset_id: 1,
             unit_fields,
-            unit_fields_hash,
         };
 
         sink.initialize_temporary_schema(abcd_fields)?;
@@ -90,7 +77,7 @@ impl<'s> DatabaseSink<'s> {
         Ok(sink)
     }
 
-    /// Initialize the temporary database schema.
+    /// Initialize the temporary storage schema.
     fn initialize_temporary_schema(&mut self, abcd_fields: &AbcdFields) -> Result<(), Error> {
         self.drop_temporary_tables()?;
 
@@ -121,11 +108,8 @@ impl<'s> DatabaseSink<'s> {
             schema = self.database_settings.schema,
             table = self.database_settings.temp_dataset_table
         ))?;
-        for (name, hash) in self.dataset_fields.iter().zip(&self.dataset_fields_hash) {
-            statement.execute(&[name, hash])?;
-        }
-        for (name, hash) in self.unit_fields.iter().zip(&self.unit_fields_hash) {
-            statement.execute(&[name, hash])?;
+        for field in self.dataset_fields.iter().chain(&self.unit_fields) {
+            statement.execute(&[&field.name, &field.hash])?;
         }
 
         Ok(())
@@ -138,10 +122,10 @@ impl<'s> DatabaseSink<'s> {
             self.database_settings.dataset_id_column
         )];
 
-        for (field, hash) in self.unit_fields.iter().zip(&self.unit_fields_hash) {
+        for field in &self.unit_fields {
             let abcd_field = abcd_fields
-                .value_of(field.as_bytes())
-                .ok_or_else(|| DatabaseSinkError::InconsistentUnitColumns(field.clone()))?;
+                .value_of(field.name.as_bytes())
+                .ok_or_else(|| DatabaseSinkError::InconsistentUnitColumns(field.name.clone()))?;
 
             let data_type_string = if abcd_field.numeric {
                 "double precision"
@@ -153,7 +137,12 @@ impl<'s> DatabaseSink<'s> {
             // let null_string = if abcd_field.vat_mandatory { "NOT NULL" } else { "" }
             let null_string = "";
 
-            fields.push(format!("\"{}\" {} {}", hash, data_type_string, null_string));
+            fields.push(format!(
+                "\"{hash}\" {datatype} {nullable}",
+                hash = field.hash,
+                datatype = data_type_string,
+                nullable = null_string,
+            ));
         }
 
         self.connection.execute(
@@ -190,10 +179,10 @@ impl<'s> DatabaseSink<'s> {
             ), // provider name
         ];
 
-        for (field, hash) in self.dataset_fields.iter().zip(&self.dataset_fields_hash) {
+        for field in &self.dataset_fields {
             let abcd_field = abcd_fields
-                .value_of(field.as_bytes())
-                .ok_or_else(|| DatabaseSinkError::InconsistentDatasetColumns(field.clone()))?;
+                .value_of(field.name.as_bytes())
+                .ok_or_else(|| DatabaseSinkError::InconsistentDatasetColumns(field.name.clone()))?;
 
             let data_type_string = if abcd_field.numeric {
                 "double precision"
@@ -205,7 +194,12 @@ impl<'s> DatabaseSink<'s> {
             // let null_string = if abcd_field.vat_mandatory { "NOT NULL" } else { "" }
             let null_string = "";
 
-            fields.push(format!("\"{}\" {} {}", hash, data_type_string, null_string));
+            fields.push(format!(
+                "\"{hash}\" {datatype} {nullable}",
+                hash = field.hash,
+                datatype = data_type_string,
+                nullable = null_string,
+            ));
         }
 
         self.connection.execute(
@@ -480,7 +474,7 @@ impl<'s> DatabaseSink<'s> {
     /// Insert a dataset and its units into the temporary tables.
     pub fn insert_dataset(&mut self, abcd_data: &AbcdResult) -> Result<(), Error> {
         // retrieve the id for the dataset
-        // if the dataset is not found, it is necessary to create a dataset database entry at first
+        // if the dataset is not found, it is necessary to create a dataset storage entry at first
         let dataset_unique_string = self.to_combined_string(&abcd_data.dataset);
         let dataset_id = match self.datasets_to_ids.entry(dataset_unique_string) {
             Entry::Occupied(e) => *e.get(),
@@ -492,7 +486,6 @@ impl<'s> DatabaseSink<'s> {
                     &self.database_settings,
                     &self.connection,
                     self.dataset_fields.as_slice(),
-                    self.dataset_fields_hash.as_slice(),
                     abcd_data,
                     id,
                 )?;
@@ -512,10 +505,9 @@ impl<'s> DatabaseSink<'s> {
 
     /// Insert the dataset metadata into the temporary schema
     fn insert_dataset_metadata(
-        database_settings: &settings::Database,
+        database_settings: &settings::DatabaseSettings,
         connection: &Connection,
-        dataset_fields: &[String],
-        dataset_fields_hash: &[String],
+        dataset_fields: &[Field],
         abcd_data: &AbcdResult,
         id: u32,
     ) -> Result<(), Error> {
@@ -536,9 +528,9 @@ impl<'s> DatabaseSink<'s> {
         values.write_field(abcd_data.dataset_path.clone())?;
         values.write_field(abcd_data.landing_page.clone())?;
         values.write_field(abcd_data.provider_id.clone())?;
-        for (field, hash) in dataset_fields.iter().zip(dataset_fields_hash.iter()) {
-            columns.push(&hash);
-            if let Some(value) = abcd_data.dataset.get(field) {
+        for field in dataset_fields {
+            columns.push(&field.hash);
+            if let Some(value) = abcd_data.dataset.get(&field.name) {
                 values.write_field(value.to_string())?;
             } else {
                 values.write_field("")?;
@@ -568,7 +560,7 @@ impl<'s> DatabaseSink<'s> {
     /// Insert the dataset units into the temporary schema
     fn insert_units(&mut self, abcd_data: &AbcdResult, dataset_id: u32) -> Result<(), Error> {
         let mut columns: Vec<String> = vec![self.database_settings.dataset_id_column.clone()];
-        columns.extend_from_slice(self.unit_fields_hash.as_slice());
+        columns.extend(self.unit_fields.iter().map(|field| field.name.clone()));
 
         let dataset_id_string = dataset_id.to_string();
 
@@ -585,7 +577,7 @@ impl<'s> DatabaseSink<'s> {
             values.write_field(&dataset_id_string)?; // put id first
 
             for field in &self.unit_fields {
-                if let Some(value) = unit_data.get(field) {
+                if let Some(value) = unit_data.get(&field.name) {
                     values.write_field(value.to_string())?;
                 } else {
                     values.write_field("")?;
@@ -615,7 +607,7 @@ impl<'s> DatabaseSink<'s> {
         let mut hash = String::new();
 
         for field in &self.dataset_fields {
-            if let Some(value) = dataset_data.get(field) {
+            if let Some(value) = dataset_data.get(&field.name) {
                 hash.push_str(&value.to_string());
             }
         }
@@ -624,7 +616,7 @@ impl<'s> DatabaseSink<'s> {
     }
 }
 
-/// An error enum for different database sink errors.
+/// An error enum for different storage sink errors.
 #[derive(Debug, Fail)]
 pub enum DatabaseSinkError {
     /// This error occurs when there is an inconsistency between the ABCD dataset data and the sink's columns.

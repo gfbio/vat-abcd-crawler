@@ -20,3 +20,10 @@ pub fn create_temp_file_with_suffix(suffix: &str, content: &str) -> TempPath {
 
     file.into_temp_path()
 }
+
+pub fn create_empty_temp_file() -> TempPath {
+    tempfile::Builder::new()
+        .tempfile()
+        .expect("Unable to create test file.")
+        .into_temp_path()
+}

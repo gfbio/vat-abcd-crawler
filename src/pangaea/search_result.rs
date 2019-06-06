@@ -1,4 +1,4 @@
-use crate::settings::Pangaea;
+use crate::settings::PangaeaSettings;
 use failure::Error;
 use serde::Deserialize;
 use serde_json::json;
@@ -85,7 +85,7 @@ impl PangaeaSearchResult {
     }
 
     pub fn retrieve_all_entries(
-        pangaea_settings: &Pangaea,
+        pangaea_settings: &PangaeaSettings,
     ) -> Result<Vec<PangaeaSearchResultEntry>, Error> {
         let mut entries = Vec::new();
 
@@ -324,7 +324,7 @@ mod tests {
 
         assert_eq!(_m2.webserver_root_url(), _m3.webserver_root_url());
 
-        let entries = PangaeaSearchResult::retrieve_all_entries(&Pangaea {
+        let entries = PangaeaSearchResult::retrieve_all_entries(&PangaeaSettings {
             search_url: _m1.webserver_root_url(),
             scroll_url: format!("{}/scroll", _m2.webserver_root_url()),
         })

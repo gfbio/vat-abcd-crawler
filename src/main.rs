@@ -9,15 +9,16 @@ use simplelog::{CombinedLogger, SharedLogger, TermLogger, WriteLogger};
 use settings::Settings;
 
 use crate::abcd::{AbcdFields, AbcdParser, ArchiveReader};
-use crate::database_sink::DatabaseSink;
 use crate::file_downloader::FileDownloader;
 use crate::pangaea::{PangaeaSearchResult, PangaeaSearchResultEntry};
+use crate::settings::TerminologyServiceSettings;
+use crate::storage::DatabaseSink;
 
 mod abcd;
-mod database_sink;
 mod file_downloader;
 mod pangaea;
 mod settings;
+mod storage;
 #[cfg(test)]
 mod test_utils;
 mod vat_type;
@@ -39,7 +40,7 @@ fn main() -> Result<(), Error> {
     let mut database_sink = match DatabaseSink::new(&settings.database, &abcd_fields) {
         Ok(sink) => sink,
         Err(e) => {
-            error!("Unable to create database sink: {}", e);
+            error!("Unable to create storage sink: {}", e);
             return Err(e); // stop program
         }
     };
@@ -100,8 +101,9 @@ fn process_datasets(
             dataset.download_url(),
         );
 
-        // TODO: generate landing page url
-        let landing_page_url: String = String::new();
+        // TODO: update landing page url from field
+        let landing_page_url: String =
+            propose_landing_page(&settings.terminology_service, dataset.download_url());
 
         for xml_bytes_result in ArchiveReader::from_path(&file_path).unwrap().bytes_iter() {
             let xml_bytes = match xml_bytes_result {
@@ -129,7 +131,7 @@ fn process_datasets(
 
             match database_sink.insert_dataset(&abcd_data) {
                 Ok(_) => (),
-                Err(e) => warn!("Unable to insert dataset into database: {}", e),
+                Err(e) => warn!("Unable to insert dataset into storage: {}", e),
             };
         }
     }
@@ -189,4 +191,15 @@ fn initialize_logger(file_path: &Path, settings: &Settings) -> Result<(), Error>
     CombinedLogger::init(loggers)?;
 
     Ok(())
+}
+
+fn propose_landing_page(
+    terminology_service_settings: &TerminologyServiceSettings,
+    dataset_url: &str,
+) -> String {
+    format!(
+        "{base_url}?archive={dataset_url}",
+        base_url = terminology_service_settings.landingpage_url,
+        dataset_url = dataset_url,
+    )
 }

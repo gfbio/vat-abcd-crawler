@@ -5,6 +5,12 @@ pub struct MockWebserver {
 }
 
 impl MockWebserver {
+    pub fn from_text(path: &str, method: &str, text: &str) -> Self {
+        Self {
+            _mock: mock(method, path).with_body(text).create(),
+        }
+    }
+
     pub fn from_json(path: &str, method: &str, json_string: &str) -> Self {
         Self {
             _mock: mock(method, path)

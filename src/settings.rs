@@ -6,29 +6,30 @@ use config::File;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-pub struct General {
+pub struct GeneralSettings {
     pub log_file: String,
     pub debug: bool,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Abcd {
+pub struct AbcdSettings {
     pub fields_file: String,
+    pub landing_page_field: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Pangaea {
+pub struct PangaeaSettings {
     pub search_url: String,
     pub scroll_url: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct TerminologyService {
+pub struct TerminologyServiceSettings {
     pub landingpage_url: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Database {
+pub struct DatabaseSettings {
     pub host: String,
     pub port: u16,
     pub tls: bool,
@@ -49,7 +50,7 @@ pub struct Database {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Debug {
+pub struct DebugSettings {
     pub dataset_start: Option<usize>,
     pub dataset_limit: Option<usize>,
 }
@@ -57,12 +58,12 @@ pub struct Debug {
 /// This struct stores the program settings.
 #[derive(Debug, Deserialize)]
 pub struct Settings {
-    pub abcd: Abcd,
-    pub pangaea: Pangaea,
-    pub terminology_service: TerminologyService,
-    pub database: Database,
-    pub debug: Debug,
-    pub general: General,
+    pub abcd: AbcdSettings,
+    pub pangaea: PangaeaSettings,
+    pub terminology_service: TerminologyServiceSettings,
+    pub database: DatabaseSettings,
+    pub debug: DebugSettings,
+    pub general: GeneralSettings,
 }
 
 impl Settings {

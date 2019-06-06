@@ -89,18 +89,12 @@ impl SearchResult {
     ) -> Result<Vec<SearchResultEntry>, Error> {
         let mut entries = Vec::new();
 
-        eprintln!("Start {}", query_url);
-
         let mut result = Self::from_url(query_url)?;
-
-        eprintln!("First request {}, Hits: {}", scroll_url, result.hits.total);
 
         while result.hits.total > 0 {
             entries.append(&mut result.hits.hits);
 
             result = Self::from_scroll_url(scroll_url, &result.scroll_id)?;
-
-            eprintln!("Another request --> Hits: {} --> -->", result.hits.total);
         }
 
         entries.append(&mut result.hits.hits);

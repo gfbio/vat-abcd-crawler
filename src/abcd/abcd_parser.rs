@@ -6,6 +6,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 
 use crate::abcd::{AbcdFields, AbcdVersion};
+use crate::settings::AbcdSettings;
 use crate::vat_type::VatType;
 
 pub type ValueMap = HashMap<String, VatType>;
@@ -14,6 +15,7 @@ pub type ValueMap = HashMap<String, VatType>;
 #[derive(Debug)]
 pub struct AbcdParser<'a> {
     abcd_fields: &'a AbcdFields,
+    abcd_settings: &'a AbcdSettings,
     abcd_version: AbcdVersion,
     xml_tag_path: Vec<u8>,
     xml_buffer: Vec<u8>,
@@ -22,8 +24,9 @@ pub struct AbcdParser<'a> {
 
 impl<'a> AbcdParser<'a> {
     /// Create a new `AbcdParser`.
-    pub fn new(abcd_fields: &'a AbcdFields) -> Self {
+    pub fn new(abcd_settings: &'a AbcdSettings, abcd_fields: &'a AbcdFields) -> Self {
         Self {
+            abcd_settings,
             abcd_fields,
             abcd_version: AbcdVersion::Unknown,
             xml_tag_path: Vec::new(),
@@ -35,9 +38,10 @@ impl<'a> AbcdParser<'a> {
     /// Parse a binary XML file to `AbcdResult`s.
     pub fn parse(
         &mut self,
+        dataset_id: &str,
         dataset_path: &str,
-        landing_page: &str,
-        provider_id: &str,
+        landing_page_proposal: &str,
+        provider_name: &str,
         xml_bytes: &[u8],
     ) -> Result<AbcdResult, Error> {
         let mut xml_reader = Reader::from_reader(xml_bytes);
@@ -131,10 +135,19 @@ impl<'a> AbcdParser<'a> {
         self.clear(); // clear resources like buffers
 
         if let Some(dataset_data) = dataset_data {
+            let landing_page = if let Some(VatType::Textual(value)) =
+                dataset_data.get(&self.abcd_settings.landing_page_field)
+            {
+                value
+            } else {
+                landing_page_proposal
+            };
+
             Ok(AbcdResult::new(
+                dataset_id.into(),
                 dataset_path.into(),
                 landing_page.into(),
-                provider_id.into(),
+                provider_name.into(),
                 dataset_data,
                 units,
             ))
@@ -168,9 +181,10 @@ impl<'a> AbcdParser<'a> {
 
 /// This struct reflects the result of a parsed xml file with miscellaneous additional static meta data
 pub struct AbcdResult {
+    pub dataset_id: String,
     pub dataset_path: String,
     pub landing_page: String,
-    pub provider_id: String,
+    pub provider_name: String,
     pub dataset: ValueMap,
     pub units: Vec<ValueMap>,
 }
@@ -178,16 +192,18 @@ pub struct AbcdResult {
 impl AbcdResult {
     /// This constructor creates a new `AbcdResult` from dataset and unit data.
     pub fn new(
+        dataset_id: String,
         dataset_path: String,
         landing_page: String,
-        provider_id: String,
+        provider_name: String,
         dataset_data: ValueMap,
         units_data: Vec<ValueMap>,
     ) -> Self {
         AbcdResult {
+            dataset_id,
             dataset_path,
             landing_page,
-            provider_id,
+            provider_name,
             dataset: dataset_data,
             units: units_data,
         }
@@ -207,6 +223,7 @@ mod tests {
 
     const TECHNICAL_CONTACT_NAME: &str = "TECHNICAL CONTACT NAME";
     const DESCRIPTION_TITLE: &str = "DESCRIPTION TITLE";
+    const LANDING_PAGE: &str = "http://LANDING-PAGE/";
     const UNIT_ID: &str = "UNIT ID";
     const UNIT_LONGITUDE: f64 = 10.911;
     const UNIT_LATITUDE: f64 = 49.911;
@@ -215,21 +232,34 @@ mod tests {
     #[test]
     fn simple_file() {
         let abcd_fields = create_abcd_fields();
+        let abcd_settings = AbcdSettings {
+            fields_file: "".into(),
+            landing_page_field: "/DataSets/DataSet/Metadata/Description/Representation/URI".into(),
+        };
+
         let test_file = create_file_as_bytes();
 
-        let mut parser = AbcdParser::new(&abcd_fields);
+        let mut parser = AbcdParser::new(&abcd_settings, &abcd_fields);
 
+        let dataset_id = "dataset_id";
         let dataset_path = "dataset_path";
-        let landing_page = "landing_page";
-        let provider_id = "provider_id";
+        let landing_page_proposal = "landing_page proposal";
+        let provider_name = "provider_id";
 
         let result = parser
-            .parse(dataset_path, landing_page, provider_id, &test_file)
+            .parse(
+                dataset_id,
+                dataset_path,
+                landing_page_proposal,
+                provider_name,
+                &test_file,
+            )
             .expect("Unable to parse bytes");
 
+        assert_eq!(result.dataset_id, dataset_id);
         assert_eq!(result.dataset_path, dataset_path);
-        assert_eq!(result.landing_page, landing_page);
-        assert_eq!(result.provider_id, provider_id);
+        assert_eq!(result.landing_page, LANDING_PAGE);
+        assert_eq!(result.provider_name, provider_name);
 
         assert_eq!(
             Some(&VatType::Textual(TECHNICAL_CONTACT_NAME.into())),
@@ -283,6 +313,7 @@ mod tests {
                     <abcd:Description>
                         <abcd:Representation language="en">
                             <abcd:Title>{DESCRIPTION_TITLE}</abcd:Title>
+                            <abcd:URI>{LANDING_PAGE}</abcd:URI>
                         </abcd:Representation>
                     </abcd:Description>
                 </abcd:Metadata>
@@ -307,6 +338,7 @@ mod tests {
             "#,
             TECHNICAL_CONTACT_NAME = TECHNICAL_CONTACT_NAME,
             DESCRIPTION_TITLE = DESCRIPTION_TITLE,
+            LANDING_PAGE = LANDING_PAGE,
             UNIT_ID = UNIT_ID,
             UNIT_LONGITUDE = UNIT_LONGITUDE,
             UNIT_LATITUDE = UNIT_LATITUDE,
@@ -327,6 +359,14 @@ mod tests {
                 },
                 {
                     "name": "/DataSets/DataSet/Metadata/Description/Representation/Title",
+                    "numeric": false,
+                    "vatMandatory": false,
+                    "gfbioMandatory": true,
+                    "globalField": true,
+                    "unit": ""
+                },
+                {
+                    "name": "/DataSets/DataSet/Metadata/Description/Representation/URI",
                     "numeric": false,
                     "vatMandatory": false,
                     "gfbioMandatory": true,

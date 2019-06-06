@@ -527,7 +527,7 @@ impl<'s> DatabaseSink<'s> {
         values.write_field(id.to_string())?;
         values.write_field(abcd_data.dataset_path.clone())?;
         values.write_field(abcd_data.landing_page.clone())?;
-        values.write_field(abcd_data.provider_id.clone())?;
+        values.write_field(abcd_data.provider_name.clone())?;
         for field in dataset_fields {
             columns.push(&field.hash);
             if let Some(value) = abcd_data.dataset.get(&field.name) {

@@ -68,7 +68,7 @@ fn process_datasets(
 ) -> Result<(), Error> {
     let temp_dir = tempfile::tempdir()?;
 
-    let mut abcd_parser = AbcdParser::new(&abcd_fields);
+    let mut abcd_parser = AbcdParser::new(&settings.abcd, &abcd_fields);
 
     for dataset in datasets
         .iter()
@@ -101,7 +101,6 @@ fn process_datasets(
             dataset.download_url(),
         );
 
-        // TODO: update landing page url from field
         let landing_page_url: String =
             propose_landing_page(&settings.terminology_service, dataset.download_url());
 
@@ -115,6 +114,7 @@ fn process_datasets(
             };
 
             let abcd_data = match abcd_parser.parse(
+                dataset.id(),
                 dataset.download_url(),
                 &landing_page_url,
                 &dataset.publisher(),

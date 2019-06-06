@@ -103,6 +103,20 @@ impl SearchResult {
     }
 }
 
+impl SearchResultEntry {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn publisher(&self) -> &str {
+        &self.source.citation_publisher
+    }
+
+    pub fn download_url(&self) -> &str {
+        &self.source.datalink
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,5 +329,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(5, entries.len());
+
+        let entry = &entries[0];
+        assert_eq!(RESULT_ID, entry.id());
+        assert_eq!(DATALINK, entry.download_url());
+        assert_eq!(CITATION_PUBLISHER, entry.publisher());
     }
 }

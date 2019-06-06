@@ -17,10 +17,14 @@ pub struct Abcd {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Bms {
-    pub monitor_url: String,
-    pub provider_url: String,
-    pub landing_page_url: String,
+pub struct Pangaea {
+    pub search_url: String,
+    pub scroll_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TerminologyService {
+    pub landingpage_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,7 +58,8 @@ pub struct Debug {
 #[derive(Debug, Deserialize)]
 pub struct Settings {
     pub abcd: Abcd,
-    pub bms: Bms,
+    pub pangaea: Pangaea,
+    pub terminology_service: TerminologyService,
     pub database: Database,
     pub debug: Debug,
     pub general: General,

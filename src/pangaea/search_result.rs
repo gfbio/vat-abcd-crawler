@@ -1,5 +1,7 @@
 use failure::Error;
 use serde::Deserialize;
+use serde_json::json;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct SearchResult {
@@ -15,7 +17,7 @@ struct SearchResultHits {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
-struct SearchResultEntry {
+pub struct SearchResultEntry {
     #[serde(rename = "_id")]
     id: String,
     #[serde(rename = "_source")]
@@ -29,42 +31,81 @@ struct SearchResultEntrySource {
 }
 
 impl SearchResult {
+    const SCROLL_TIMEOUT: &'static str = "1m";
+
     fn from_url(url: &str) -> Result<Self, Error> {
-        const SCROLL_TIMEOUT: &str = "1m";
-        reqwest::Client::new()
-            .get(&format!(
-                "{url}?scroll={scroll}",
-                url = url,
-                scroll = SCROLL_TIMEOUT,
-            ))
-            .json(
-                r#"{
-                    "query": {
-                        "bool": {
-                            "filter": [
-                                {
-                                    "term": {
-                                        "internal-source": "gfbio-abcd-collections"
-                                    }
-                                },
-                                {
-                                    "match_phrase": {
-                                        "type": "ABCD_Dataset"
-                                    }
-                                },
-                                {
-                                    "term": {
-                                        "accessRestricted": false
-                                    }
-                                }
-                            ]
+        let body = json!({
+            "query": {
+                "bool": {
+                    "filter": [
+                        {
+                            "term": {
+                                "internal-source": "gfbio-abcd-collections"
+                            }
+                        },
+                        {
+                            "match_phrase": {
+                                "type": "ABCD_Dataset"
+                            }
+                        },
+                        {
+                            "term": {
+                                "accessRestricted": false
+                            }
                         }
-                    }
-                }"#,
-            )
+                    ]
+                }
+            }
+        });
+
+        reqwest::Client::new()
+            .post(&format!(
+                "{url}?scroll={scroll_timeout}",
+                url = url,
+                scroll_timeout = Self::SCROLL_TIMEOUT,
+            ))
+            .json(&body)
             .send()?
             .json::<Self>()
             .map_err(|e| e.into())
+    }
+
+    fn from_scroll_url(url: &str, scroll_id: &str) -> Result<Self, Error> {
+        let mut body = HashMap::new();
+        body.insert("scroll", Self::SCROLL_TIMEOUT);
+        body.insert("scroll_id", scroll_id);
+
+        reqwest::Client::new()
+            .post(url)
+            .json(&body)
+            .send()?
+            .json::<Self>()
+            .map_err(|e| e.into())
+    }
+
+    pub fn retrieve_all_entries(
+        query_url: &str,
+        scroll_url: &str,
+    ) -> Result<Vec<SearchResultEntry>, Error> {
+        let mut entries = Vec::new();
+
+        eprintln!("Start {}", query_url);
+
+        let mut result = Self::from_url(query_url)?;
+
+        eprintln!("First request {}, Hits: {}", scroll_url, result.hits.total);
+
+        while result.hits.total > 0 {
+            entries.append(&mut result.hits.hits);
+
+            result = Self::from_scroll_url(scroll_url, &result.scroll_id)?;
+
+            eprintln!("Another request --> Hits: {} --> -->", result.hits.total);
+        }
+
+        entries.append(&mut result.hits.hits);
+
+        Ok(entries)
     }
 }
 
@@ -72,101 +113,67 @@ impl SearchResult {
 mod tests {
     use super::*;
 
-    use crate::test_utils;
+    use crate::test_utils::MockWebserver;
+    use serde_json::Value as JsonValue;
 
     const CITATION_PUBLISHER: &str = "Test Publisher";
-    const CITATION_PUBLISHER_2: &str = "Test Publisher";
+    const CITATION_PUBLISHER_2: &str = "Test Publisher 2";
     const DATALINK: &str = "https://foobar.de";
     const DATALINK_2: &str = "https://foobar2.de";
     const RESULT_ID: &str = "test_id";
-    const RESULT_ID_2: &str = "test_id";
+    const RESULT_ID_2: &str = "test_id_2";
     const SEARCH_RESULT_HITS: u64 = 64;
     const SCROLL_ID: &str = "SCROLL_ID_SCROLL_ID";
+    const SCROLL_ID_2: &str = "SCROLL_ID_SCROLL_ID_2";
 
-    const SEARCH_RESULT_ENTRY_SOURCE_JSON: fn() -> String = || {
-        format!(
-            r#"
-            {{
-                "citation_publisher": "{citation_publisher}",
-                "datalink": "{datalink}"
-            }}
-        "#,
-            citation_publisher = CITATION_PUBLISHER,
-            datalink = DATALINK,
-        )
+    const SEARCH_RESULT_ENTRY_SOURCE_JSON: fn() -> JsonValue = || {
+        json!({
+            "citation_publisher": CITATION_PUBLISHER,
+            "datalink": DATALINK,
+        })
     };
-    const SEARCH_RESULT_ENTRY_SOURCE_JSON_2: fn() -> String = || {
-        format!(
-            r#"
-            {{
-                "citation_publisher": "{citation_publisher}",
-                "datalink": "{datalink}"
-            }}
-        "#,
-            citation_publisher = CITATION_PUBLISHER_2,
-            datalink = DATALINK_2,
-        )
+    const SEARCH_RESULT_ENTRY_SOURCE_JSON_2: fn() -> JsonValue = || {
+        json!({
+            "citation_publisher": CITATION_PUBLISHER_2,
+            "datalink": DATALINK_2,
+        })
     };
-    const SEARCH_RESULT_ENTRY_JSON: fn() -> String = || {
-        format!(
-            r#"
-                {{
-                    "_id": "{test_id}",
-                    "_source": {source}
-                }}
-            "#,
-            test_id = RESULT_ID,
-            source = SEARCH_RESULT_ENTRY_SOURCE_JSON(),
-        )
+    const SEARCH_RESULT_ENTRY_JSON: fn() -> JsonValue = || {
+        json!({
+            "_id": RESULT_ID,
+            "_source": SEARCH_RESULT_ENTRY_SOURCE_JSON(),
+        })
     };
-    const SEARCH_RESULT_ENTRY_JSON_2: fn() -> String = || {
-        format!(
-            r#"
-                {{
-                    "_id": "{test_id}",
-                    "_source": {source}
-                }}
-            "#,
-            test_id = RESULT_ID_2,
-            source = SEARCH_RESULT_ENTRY_SOURCE_JSON_2(),
-        )
+    const SEARCH_RESULT_ENTRY_JSON_2: fn() -> JsonValue = || {
+        json!({
+            "_id": RESULT_ID_2,
+            "_source": SEARCH_RESULT_ENTRY_SOURCE_JSON_2(),
+        })
     };
-    const SEARCH_RESULT_HITS_JSON: fn() -> String = || {
-        format!(
-            r#"
-            {{
-                "total": {hits},
-                "max_score": 1.0,
-                "hits": [
-                    {r1},
-                    {r2}
-                ]
-            }}
-            "#,
-            hits = SEARCH_RESULT_HITS,
-            r1 = SEARCH_RESULT_ENTRY_JSON(),
-            r2 = SEARCH_RESULT_ENTRY_JSON_2(),
-        )
+    const SEARCH_RESULT_HITS_JSON: fn() -> JsonValue = || {
+        json!({
+            "total": SEARCH_RESULT_HITS,
+            "max_score": 1.0,
+            "hits": [
+                SEARCH_RESULT_ENTRY_JSON(),
+                SEARCH_RESULT_ENTRY_JSON_2(),
+            ],
+        })
     };
-    const SEARCH_RESULT_JSON: fn() -> String = || {
-        format!(
-            r#"
-            {{
-                "_scroll_id": "{scroll_id}",
-                "took": 1373,
-                "hits": {hits}
-            }}
-            "#,
-            scroll_id = SCROLL_ID,
-            hits = SEARCH_RESULT_HITS_JSON(),
-        )
+    const SEARCH_RESULT_JSON: fn() -> JsonValue = || {
+        json!({
+            "_scroll_id": SCROLL_ID,
+            "took": 1373,
+            "hits": SEARCH_RESULT_HITS_JSON(),
+        })
     };
 
     #[test]
     fn parse_search_result_entry_source() {
-        let search_result_entry_source =
-            serde_json::from_str::<SearchResultEntrySource>(&SEARCH_RESULT_ENTRY_SOURCE_JSON())
-                .unwrap();
+        let search_result_entry_source = serde_json::from_str::<SearchResultEntrySource>(
+            &SEARCH_RESULT_ENTRY_SOURCE_JSON().to_string(),
+        )
+        .unwrap();
 
         assert_eq!(
             search_result_entry_source,
@@ -180,7 +187,8 @@ mod tests {
     #[test]
     fn parse_search_result_entry() {
         let search_result_entry =
-            serde_json::from_str::<SearchResultEntry>(&SEARCH_RESULT_ENTRY_JSON()).unwrap();
+            serde_json::from_str::<SearchResultEntry>(&SEARCH_RESULT_ENTRY_JSON().to_string())
+                .unwrap();
 
         assert_eq!(
             search_result_entry,
@@ -197,7 +205,8 @@ mod tests {
     #[test]
     fn parse_search_result_hits() {
         let search_result_hits =
-            serde_json::from_str::<SearchResultHits>(&SEARCH_RESULT_HITS_JSON()).unwrap();
+            serde_json::from_str::<SearchResultHits>(&SEARCH_RESULT_HITS_JSON().to_string())
+                .unwrap();
 
         assert_eq!(
             search_result_hits,
@@ -220,12 +229,13 @@ mod tests {
                     },
                 ],
             }
-        )
+        );
     }
 
     #[test]
     fn parse_search_result() {
-        let search_result = serde_json::from_str::<SearchResult>(&SEARCH_RESULT_JSON()).unwrap();
+        let search_result =
+            serde_json::from_str::<SearchResult>(&SEARCH_RESULT_JSON().to_string()).unwrap();
 
         assert_eq!(search_result.scroll_id, SCROLL_ID);
         assert_eq!(search_result.hits.hits.len(), 2);
@@ -233,11 +243,83 @@ mod tests {
 
     #[test]
     fn parse_webserver_result() {
-        let _webserver = test_utils::create_json_webserver(&SEARCH_RESULT_JSON());
+        let webserver = MockWebserver::from_json(
+            &format!("/?scroll={}", SearchResult::SCROLL_TIMEOUT),
+            "POST",
+            &SEARCH_RESULT_JSON().to_string(),
+        );
 
-        let search_result = SearchResult::from_url(&test_utils::webserver_url()).unwrap();
+        let search_result = SearchResult::from_url(&webserver.webserver_root_url()).unwrap();
 
         assert_eq!(search_result.scroll_id, SCROLL_ID);
         assert_eq!(search_result.hits.hits.len(), 2);
+    }
+
+    #[test]
+    fn parse_scroll_result() {
+        let webserver = MockWebserver::from_json("/", "POST", &SEARCH_RESULT_JSON().to_string());
+
+        let search_result =
+            SearchResult::from_scroll_url(&webserver.webserver_root_url(), SCROLL_ID).unwrap();
+
+        assert_eq!(search_result.scroll_id, SCROLL_ID);
+        assert_eq!(search_result.hits.hits.len(), 2);
+    }
+
+    #[test]
+    fn collect_multiple_request_data() {
+        let _m1 =
+            MockWebserver::from_json("/?scroll=1m", "POST", &SEARCH_RESULT_JSON().to_string());
+        let _m2 = MockWebserver::from_json_with_json_condition(
+            "/scroll",
+            "POST",
+            &json!({
+              "scroll" : SearchResult::SCROLL_TIMEOUT,
+              "scroll_id" : SCROLL_ID,
+            })
+            .to_string(),
+            &json!({
+                "_scroll_id": SCROLL_ID_2,
+                "took": 1373,
+                "hits": {
+                    "total": SEARCH_RESULT_HITS, // <-- CONTINUE
+                    "hits": [
+                        SEARCH_RESULT_ENTRY_JSON(),
+                        SEARCH_RESULT_ENTRY_JSON_2(),
+                    ],
+                },
+            })
+            .to_string(),
+        );
+        let _m3 = MockWebserver::from_json_with_json_condition(
+            "/scroll",
+            "POST",
+            &json!({
+              "scroll" : SearchResult::SCROLL_TIMEOUT,
+              "scroll_id" : SCROLL_ID_2,
+            })
+            .to_string(),
+            &json!({
+                "_scroll_id": SCROLL_ID_2,
+                "took": 1373,
+                "hits": {
+                    "total": 0, // <-- NO CONTINUE
+                    "hits": [
+                        SEARCH_RESULT_ENTRY_JSON(),
+                    ],
+                },
+            })
+            .to_string(),
+        );
+
+        assert_eq!(_m2.webserver_root_url(), _m3.webserver_root_url());
+
+        let entries = SearchResult::retrieve_all_entries(
+            &_m1.webserver_root_url(),
+            &format!("{}/scroll", _m2.webserver_root_url()),
+        )
+        .unwrap();
+
+        assert_eq!(5, entries.len());
     }
 }

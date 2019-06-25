@@ -1,6 +1,3 @@
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-
 use csv::WriterBuilder;
 use failure::{Error, Fail};
 use log::debug;
@@ -10,9 +7,10 @@ use postgres::tls::openssl::OpenSsl;
 use postgres::transaction::Transaction;
 use postgres::{Connection, TlsMode};
 
-use crate::abcd::{AbcdFields, AbcdResult, ValueMap};
+use crate::abcd::{AbcdFields, AbcdResult};
 use crate::settings;
-use crate::storage::Field;
+use crate::settings::DatabaseSettings;
+use crate::storage::{Field, SurrogateKey, SurrogateKeyType};
 
 const POSTGRES_CSV_CONFIGURATION: &str =
     "DELIMITER '\t', NULL '', QUOTE '\"', ESCAPE '\"', FORMAT CSV";
@@ -22,8 +20,7 @@ pub struct DatabaseSink<'s> {
     connection: Connection,
     database_settings: &'s settings::DatabaseSettings,
     dataset_fields: Vec<Field>,
-    datasets_to_ids: HashMap<String, u32>,
-    next_dataset_id: u32,
+    surrogate_key: SurrogateKey,
     unit_fields: Vec<Field>,
 }
 
@@ -33,21 +30,53 @@ impl<'s> DatabaseSink<'s> {
         database_settings: &'s settings::DatabaseSettings,
         abcd_fields: &AbcdFields,
     ) -> Result<Self, Error> {
-        // create storage connection params from the settings, including optional tls
-        let negotiator = if database_settings.tls {
-            Some(OpenSsl::new()?)
-        } else {
-            None
+        let connection = <DatabaseSink<'s>>::create_database_connection(&database_settings)?;
+
+        let (dataset_fields, unit_fields) =
+            <DatabaseSink<'s>>::create_lists_of_dataset_and_unit_fields(abcd_fields);
+
+        let mut sink = Self {
+            connection,
+            database_settings,
+            dataset_fields,
+            surrogate_key: Default::default(),
+            unit_fields,
         };
+
+        sink.initialize_temporary_schema(abcd_fields)?;
+
+        Ok(sink)
+    }
+
+    fn create_database_connection(
+        database_settings: &DatabaseSettings,
+    ) -> Result<Connection, Error> {
         let connection_params = ConnectParams::builder()
             .user(&database_settings.user, Some(&database_settings.password))
             .port(database_settings.port)
             .database(&database_settings.database)
             .build(Host::Tcp(database_settings.host.clone()));
 
-        // fill lists of dataset and unit fields and give them a fixed order for the storage inserts
+        let negotiator = if database_settings.tls {
+            Some(OpenSsl::new()?)
+        } else {
+            None
+        };
+        let tls_mode = if let Some(ref negotiator) = negotiator {
+            TlsMode::Prefer(negotiator)
+        } else {
+            TlsMode::None
+        };
+
+        Ok(Connection::connect(connection_params, tls_mode)?)
+    }
+
+    fn create_lists_of_dataset_and_unit_fields(
+        abcd_fields: &AbcdFields,
+    ) -> (Vec<Field>, Vec<Field>) {
         let mut dataset_fields = Vec::new();
         let mut unit_fields = Vec::new();
+
         for field in abcd_fields {
             if field.global_field {
                 dataset_fields.push(field.name.as_str().into());
@@ -56,25 +85,7 @@ impl<'s> DatabaseSink<'s> {
             }
         }
 
-        let mut sink = Self {
-            connection: Connection::connect(
-                connection_params,
-                if let Some(negotiator) = &negotiator {
-                    TlsMode::Prefer(negotiator)
-                } else {
-                    TlsMode::None
-                },
-            )?,
-            database_settings,
-            dataset_fields,
-            datasets_to_ids: HashMap::new(),
-            next_dataset_id: 1,
-            unit_fields,
-        };
-
-        sink.initialize_temporary_schema(abcd_fields)?;
-
-        Ok(sink)
+        (dataset_fields, unit_fields)
     }
 
     /// Initialize the temporary storage schema.
@@ -95,10 +106,10 @@ impl<'s> DatabaseSink<'s> {
         // create table
         self.connection.execute(
             &format!(
-            "create table {schema}.{table}_translation (name text not null, hash text not null);",
-            schema = self.database_settings.schema,
-            table = self.database_settings.temp_dataset_table
-        ),
+                "create table {schema}.{table}_translation (name text not null, hash text not null);",
+                schema = self.database_settings.schema,
+                table = self.database_settings.temp_dataset_table
+            ),
             &[],
         )?;
 
@@ -119,7 +130,7 @@ impl<'s> DatabaseSink<'s> {
     fn create_temporary_unit_table(&mut self, abcd_fields: &AbcdFields) -> Result<(), Error> {
         let mut fields = vec![format!(
             "{} int not null",
-            self.database_settings.dataset_id_column
+            self.database_settings.surrogate_key_column,
         )];
 
         for field in &self.unit_fields {
@@ -163,8 +174,9 @@ impl<'s> DatabaseSink<'s> {
         let mut fields = vec![
             format!(
                 "{} int primary key",
-                self.database_settings.dataset_id_column
-            ), // id
+                self.database_settings.surrogate_key_column,
+            ), // surrogate key
+            format!("{} text not null", self.database_settings.dataset_id_column), // id
             format!(
                 "{} text not null",
                 self.database_settings.dataset_path_column
@@ -342,9 +354,9 @@ impl<'s> DatabaseSink<'s> {
                 schema = &self.database_settings.schema,
                 table = &self.database_settings.unit_table,
                 temp_prefix = &self.database_settings.temp_unit_table,
-                temp_suffix = &self.database_settings.dataset_id_column,
+                temp_suffix = &self.database_settings.surrogate_key_column,
                 prefix = &self.database_settings.unit_table,
-                suffix = &self.database_settings.dataset_id_column
+                suffix = &self.database_settings.surrogate_key_column
             ),
             // index
             format!(
@@ -368,29 +380,35 @@ impl<'s> DatabaseSink<'s> {
              FOREIGN KEY ({dataset_id}) REFERENCES {schema}.{dataset_table}({dataset_id});",
             schema = &self.database_settings.schema,
             unit_table = &self.database_settings.temp_unit_table,
-            dataset_id = &self.database_settings.dataset_id_column,
+            dataset_id = &self.database_settings.surrogate_key_column,
             dataset_table = &self.database_settings.temp_dataset_table
         );
         debug!("{}", &foreign_key_statement);
         self.connection.execute(&foreign_key_statement, &[])?;
-        let mut hasher = sha1::Sha1::new();
         let indexed_unit_column_names = self
             .database_settings
             .unit_indexed_columns
             .iter()
-            .map(|field| {
-                hasher.reset();
-                hasher.update(field.as_bytes());
-                hasher.digest().to_string()
-            })
+            .map(Field::from)
+            .map(|field| field.hash)
             .collect::<Vec<String>>();
         let unit_index_statement = format!(
             "CREATE INDEX {unit_table}_idx ON {schema}.{unit_table} \
-             USING btree ({dataset_id}, \"{other}\");",
+             USING btree ({surrogate_key_column} {other_begin}{other}{other_end});",
             schema = &self.database_settings.schema,
             unit_table = &self.database_settings.temp_unit_table,
-            dataset_id = &self.database_settings.dataset_id_column,
-            other = indexed_unit_column_names.join("\", \"")
+            surrogate_key_column = &self.database_settings.surrogate_key_column,
+            other_begin = if indexed_unit_column_names.is_empty() {
+                ""
+            } else {
+                ", \""
+            },
+            other = indexed_unit_column_names.join("\", \""),
+            other_end = if indexed_unit_column_names.is_empty() {
+                ""
+            } else {
+                "\""
+            },
         );
         debug!("{}", &unit_index_statement);
         self.connection.execute(&unit_index_statement, &[])?;
@@ -422,49 +440,62 @@ impl<'s> DatabaseSink<'s> {
     /// Create view that provides a listing view
     pub fn create_listing_view(&self, transaction: &Transaction) -> Result<(), Error> {
         // TODO: replace full names with settings call
-        let mut hasher = sha1::Sha1::new();
 
-        hasher.update(b"/DataSets/DataSet/Metadata/Description/Representation/Title");
-        let dataset_name = hasher.digest().to_string();
-        hasher.reset();
+        let dataset_title = if let Some(field) = self.dataset_fields.iter().find(|field| {
+            field.name == "/DataSets/DataSet/Metadata/Description/Representation/Title"
+        }) {
+            format!("\"{}\"", field.hash)
+        } else {
+            "''".to_string()
+        };
 
-        hasher.update(b"/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal");
-        let latitude_column_hash = hasher.digest().to_string();
-        hasher.reset();
+        let latitude_column = if let Some(field) = self.unit_fields.iter().find(|field| {
+            field.name == "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal"
+        }) {
+            format!("\"{}\"", field.hash)
+        } else {
+            "NULL".to_string()
+        };
 
-        hasher.update(b"/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal");
-        let longitude_column_hash = hasher.digest().to_string();
-        hasher.reset();
+        let longitude_column = if let Some(field) = self.unit_fields.iter().find(|field| {
+            field.name == "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal"
+        }) {
+            format!("\"{}\"", field.hash)
+        } else {
+            "NULL".to_string()
+        };
 
         let view_statement = format!(
             r#"
             CREATE VIEW {schema}.{view_name} AS (
-            select link, dataset, file, provider, isGeoReferenced as available, isGeoReferenced
+            select link, dataset, id, provider, isGeoReferenced as available, isGeoReferenced
             from (
                    select {dataset_landing_page_column} as link,
-                          "{dataset_name}"              as dataset,
-                          {dataset_path_column}         as file,
+                          {dataset_title}               as dataset,
+                          {dataset_id_column}           as id,
                           {dataset_provider_column}     as provider,
                           (SELECT EXISTS(
                               select * from {schema}.{unit_table}
-                              where {dataset_table}.{dataset_id_column} = {unit_table}.{dataset_id_column}
-                                and "{latitude_column_hash}" is not null
-                                and "{longitude_column_hash}" is not null
+                              where {dataset_table}.{surrogate_key_column} = {unit_table}.{surrogate_key_column}
+                                and {latitude_column} is not null
+                                and {longitude_column} is not null
                             ))                 as isGeoReferenced
                    from {schema}.{dataset_table}
             ) sub);"#,
             schema = self.database_settings.schema,
             view_name = self.database_settings.listing_view,
-            dataset_name = dataset_name,
+            dataset_title = dataset_title,
             dataset_landing_page_column = self.database_settings.dataset_landing_page_column,
-            dataset_path_column = self.database_settings.dataset_path_column,
+            dataset_id_column = self.database_settings.dataset_id_column,
             dataset_provider_column = self.database_settings.dataset_provider_column,
             dataset_table = self.database_settings.dataset_table,
             unit_table = self.database_settings.unit_table,
-            dataset_id_column = self.database_settings.dataset_id_column,
-            latitude_column_hash = latitude_column_hash,
-            longitude_column_hash = longitude_column_hash,
+            surrogate_key_column = self.database_settings.surrogate_key_column,
+            latitude_column = latitude_column,
+            longitude_column = longitude_column,
         );
+
+        eprintln!("{}", &view_statement);
 
         transaction.execute(&view_statement, &[])?;
 
@@ -473,32 +504,21 @@ impl<'s> DatabaseSink<'s> {
 
     /// Insert a dataset and its units into the temporary tables.
     pub fn insert_dataset(&mut self, abcd_data: &AbcdResult) -> Result<(), Error> {
-        // retrieve the id for the dataset
-        // if the dataset is not found, it is necessary to create a dataset storage entry at first
-        let dataset_unique_string = self.to_combined_string(&abcd_data.dataset);
-        let dataset_id = match self.datasets_to_ids.entry(dataset_unique_string) {
-            Entry::Occupied(e) => *e.get(),
-            Entry::Vacant(o) => {
-                // retrieve next dataset id
-                let id = self.next_dataset_id;
-
+        match self.surrogate_key.for_id(&abcd_data.dataset_id) {
+            SurrogateKeyType::New(surrogate_key) => {
                 Self::insert_dataset_metadata(
                     &self.database_settings,
                     &self.connection,
                     self.dataset_fields.as_slice(),
                     abcd_data,
-                    id,
+                    surrogate_key,
                 )?;
-
-                // store id in map and increase next id variable
-                o.insert(id);
-                self.next_dataset_id += 1;
-
-                id
+                self.insert_units(&abcd_data, surrogate_key)?;
             }
-        };
-
-        self.insert_units(&abcd_data, dataset_id)?;
+            SurrogateKeyType::Existing(surrogate_key) => {
+                self.insert_units(&abcd_data, surrogate_key)?;
+            }
+        }
 
         Ok(())
     }
@@ -519,12 +539,14 @@ impl<'s> DatabaseSink<'s> {
             .has_headers(false)
             .from_writer(vec![]);
         let mut columns: Vec<&str> = vec![
+            database_settings.surrogate_key_column.as_ref(),
             database_settings.dataset_id_column.as_ref(),
             database_settings.dataset_path_column.as_ref(),
             database_settings.dataset_landing_page_column.as_ref(),
             database_settings.dataset_provider_column.as_ref(),
         ];
         values.write_field(id.to_string())?;
+        values.write_field(abcd_data.dataset_id.clone())?;
         values.write_field(abcd_data.dataset_path.clone())?;
         values.write_field(abcd_data.landing_page.clone())?;
         values.write_field(abcd_data.provider_name.clone())?;
@@ -558,11 +580,9 @@ impl<'s> DatabaseSink<'s> {
     }
 
     /// Insert the dataset units into the temporary schema
-    fn insert_units(&mut self, abcd_data: &AbcdResult, dataset_id: u32) -> Result<(), Error> {
-        let mut columns: Vec<String> = vec![self.database_settings.dataset_id_column.clone()];
-        columns.extend(self.unit_fields.iter().map(|field| field.name.clone()));
-
-        let dataset_id_string = dataset_id.to_string();
+    fn insert_units(&mut self, abcd_data: &AbcdResult, id: u32) -> Result<(), Error> {
+        let mut columns: Vec<String> = vec![self.database_settings.surrogate_key_column.clone()];
+        columns.extend(self.unit_fields.iter().map(|field| field.hash.clone()));
 
         let mut values = WriterBuilder::new()
             .terminator(csv::Terminator::Any(b'\n'))
@@ -574,7 +594,7 @@ impl<'s> DatabaseSink<'s> {
 
         // append units one by one to tsv
         for unit_data in &abcd_data.units {
-            values.write_field(&dataset_id_string)?; // put id first
+            values.write_field(&id.to_string())?; // put id first
 
             for field in &self.unit_fields {
                 if let Some(value) = unit_data.get(&field.name) {
@@ -601,19 +621,6 @@ impl<'s> DatabaseSink<'s> {
 
         Ok(())
     }
-
-    /// Combines all values of the dataset's metadata into a new string.
-    fn to_combined_string(&self, dataset_data: &ValueMap) -> String {
-        let mut hash = String::new();
-
-        for field in &self.dataset_fields {
-            if let Some(value) = dataset_data.get(&field.name) {
-                hash.push_str(&value.to_string());
-            }
-        }
-
-        hash
-    }
 }
 
 /// An error enum for different storage sink errors.
@@ -625,4 +632,728 @@ pub enum DatabaseSinkError {
     /// This error occurs when there is an inconsistency between the ABCD unit data and the sink's columns.
     #[fail(display = "Inconsistent unit columns: {}", 0)]
     InconsistentUnitColumns(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::settings::{DatabaseSettings, Settings};
+    use crate::test_utils;
+    use postgres::rows::Rows;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[test]
+    fn schema_creation_leads_to_required_tables() {
+        let database_settings = retrieve_settings_from_file_and_override_schema();
+        let abcd_fields = create_abcd_fields_from_json(&json!([]));
+
+        let database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+
+        let tables = retrieve_ordered_table_names(&database_sink);
+
+        assert_eq!(
+            tables,
+            sorted_vec(vec![
+                database_settings.temp_dataset_table.clone(),
+                database_settings.temp_unit_table.clone(),
+                format!("{}_translation", database_settings.temp_dataset_table)
+            ])
+        );
+    }
+
+    #[test]
+    fn schema_creation_leads_to_required_columns_in_dataset_table() {
+        let database_settings = retrieve_settings_from_file_and_override_schema();
+        let abcd_fields = create_abcd_fields_from_json(&json!([
+            {
+                "name": "/DataSets/DataSet/TechnicalContacts/TechnicalContact/Name",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+            {
+                "name": "/DataSets/DataSet/Metadata/Description/Representation/Title",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+            {
+                "name": "/DataSets/DataSet/Metadata/Description/Representation/URI",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+        ]));
+
+        let database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+
+        let dataset_table_columns = retrieve_ordered_table_column_names(
+            &database_sink,
+            &database_settings.temp_dataset_table,
+        );
+
+        let dataset_columns = extract_dataset_fields(&abcd_fields)
+            .iter()
+            .map(|field| field.hash.clone())
+            .chain(vec![
+                database_settings.surrogate_key_column.clone(),
+                "dataset_id".to_string(),
+                "dataset_landing_page".to_string(),
+                "dataset_path".to_string(),
+                "dataset_provider".to_string(),
+            ])
+            .collect::<Vec<_>>();
+
+        assert!(!dataset_columns.is_empty());
+        assert_eq!(dataset_table_columns, sorted_vec(dataset_columns));
+    }
+
+    #[test]
+    fn schema_creation_leads_to_required_columns_in_unit_table() {
+        let database_settings = retrieve_settings_from_file_and_override_schema();
+        let abcd_fields = create_abcd_fields_from_json(&json!([
+            {
+                "name": "/DataSets/DataSet/Units/Unit/UnitID",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": false,
+                "unit": ""
+            },
+            {
+                "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal",
+                "numeric": true,
+                "vatMandatory": true,
+                "gfbioMandatory": true,
+                "globalField": false,
+                "unit": "°"
+            },
+            {
+                "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal",
+                "numeric": true,
+                "vatMandatory": true,
+                "gfbioMandatory": true,
+                "globalField": false,
+                "unit": "°"
+            },
+            {
+                "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/SpatialDatum",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": false,
+                "unit": ""
+            }
+        ]));
+
+        let database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+
+        let dataset_table_columns =
+            retrieve_ordered_table_column_names(&database_sink, &database_settings.temp_unit_table);
+
+        let unit_columns = extract_unit_fields(&abcd_fields)
+            .iter()
+            .map(|field| field.hash.clone())
+            .chain(vec![database_settings.surrogate_key_column.clone()])
+            .collect::<Vec<_>>();
+
+        assert!(!unit_columns.is_empty());
+        assert_eq!(dataset_table_columns, sorted_vec(unit_columns));
+    }
+
+    #[test]
+    fn translation_table_contains_entries() {
+        let database_settings = retrieve_settings_from_file_and_override_schema();
+        let abcd_fields = create_abcd_fields_from_json(&json!([
+            {
+                "name": "/DataSets/DataSet/TechnicalContacts/TechnicalContact/Name",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+            {
+                "name": "/DataSets/DataSet/Metadata/Description/Representation/Title",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+            {
+                "name": "/DataSets/DataSet/Metadata/Description/Representation/URI",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+        ]));
+
+        let database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+
+        let expected_translation_table_columns = vec![
+            "/DataSets/DataSet/TechnicalContacts/TechnicalContact/Name",
+            "/DataSets/DataSet/Metadata/Description/Representation/Title",
+            "/DataSets/DataSet/Metadata/Description/Representation/URI",
+        ];
+
+        let queried_translation_table_columns =
+            retrieve_translation_table_keys(&database_settings, &database_sink);
+
+        assert_eq!(
+            sorted_vec(expected_translation_table_columns),
+            sorted_vec(queried_translation_table_columns)
+        );
+    }
+
+    #[test]
+    fn translation_table_entries_match_table_columns() {
+        let database_settings = retrieve_settings_from_file_and_override_schema();
+        let abcd_fields = create_abcd_fields_from_json(&json!([
+            {
+                "name": "/DataSets/DataSet/TechnicalContacts/TechnicalContact/Name",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+            {
+                "name": "/DataSets/DataSet/Metadata/Description/Representation/Title",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+            {
+                "name": "/DataSets/DataSet/Units/Unit/UnitID",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": false,
+                "unit": ""
+            },
+        ]));
+
+        let database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+
+        let dataset_table_columns = retrieve_ordered_table_column_names(
+            &database_sink,
+            &database_settings.temp_dataset_table,
+        );
+        let unit_table_columns =
+            retrieve_ordered_table_column_names(&database_sink, &database_settings.temp_unit_table);
+
+        let translation_table_values =
+            retrieve_translation_table_values(&database_settings, &database_sink);
+
+        for column_name in translation_table_values {
+            assert!(
+                dataset_table_columns.contains(&column_name)
+                    || unit_table_columns.contains(&column_name)
+            );
+        }
+    }
+
+    #[test]
+    fn dataset_table_contains_entry_after_insert() {
+        let database_settings = retrieve_settings_from_file_and_override_schema();
+        let abcd_fields = create_abcd_fields_from_json(&json!([
+            {
+                "name": "DS_TEXT",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+            {
+                "name": "DS_NUM",
+                "numeric": true,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+            {
+                "name": "UNIT_TEXT",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": false,
+                "unit": ""
+            },
+            {
+                "name": "UNIT_NUM",
+                "numeric": true,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": false,
+                "unit": ""
+            },
+        ]));
+
+        let mut database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+
+        database_sink
+            .insert_dataset(&AbcdResult {
+                dataset_id: "TEST_ID".to_string(),
+                dataset_path: "TEST_PATH".to_string(),
+                landing_page: "TEST_LANDING_PAGE".to_string(),
+                provider_name: "TEST_PROVIDER".to_string(),
+                dataset: {
+                    let mut values = HashMap::new();
+                    values.insert("DS_TEXT".into(), "FOOBAR".into());
+                    values.insert("DS_NUM".into(), 42.0.into());
+                    values
+                },
+                units: vec![
+                    {
+                        let mut values = HashMap::new();
+                        values.insert("UNIT_TEXT".into(), "FOO".into());
+                        values.insert("UNIT_NUM".into(), 13.0.into());
+                        values
+                    },
+                    {
+                        let mut values = HashMap::new();
+                        values.insert("UNIT_TEXT".into(), "BAR".into());
+                        values.insert("UNIT_NUM".into(), 37.0.into());
+                        values
+                    },
+                ],
+            })
+            .unwrap();
+
+        assert_eq!(
+            1,
+            number_of_entries(&database_sink, &database_settings.temp_dataset_table)
+        );
+        assert_eq!(
+            2,
+            number_of_entries(&database_sink, &database_settings.temp_unit_table)
+        );
+
+        let dataset_result =
+            retrieve_rows(&mut database_sink, &database_settings.temp_dataset_table);
+
+        let dataset = dataset_result.get(0);
+        assert_eq!(
+            "TEST_ID",
+            dataset.get::<_, String>(database_settings.dataset_id_column.as_str())
+        );
+        assert_eq!(
+            "TEST_PATH",
+            dataset.get::<_, String>(database_settings.dataset_path_column.as_str())
+        );
+        assert_eq!(
+            "TEST_LANDING_PAGE",
+            dataset.get::<_, String>(database_settings.dataset_landing_page_column.as_str())
+        );
+        assert_eq!(
+            "TEST_PROVIDER",
+            dataset.get::<_, String>(database_settings.dataset_provider_column.as_str())
+        );
+        assert_eq!(
+            "FOOBAR",
+            dataset.get::<_, String>(Field::new("DS_TEXT").hash.as_str())
+        );
+        assert_eq!(
+            42.0,
+            dataset.get::<_, f64>(Field::new("DS_NUM").hash.as_str())
+        );
+
+        let unit_result = retrieve_rows(&mut database_sink, &database_settings.temp_unit_table);
+
+        let unit1 = unit_result.get(0);
+        assert_eq!(
+            "FOO",
+            unit1.get::<_, String>(Field::new("UNIT_TEXT").hash.as_str())
+        );
+        assert_eq!(
+            13.0,
+            unit1.get::<_, f64>(Field::new("UNIT_NUM").hash.as_str())
+        );
+
+        let unit2 = unit_result.get(1);
+        assert_eq!(
+            "BAR",
+            unit2.get::<_, String>(Field::new("UNIT_TEXT").hash.as_str())
+        );
+        assert_eq!(
+            37.0,
+            unit2.get::<_, f64>(Field::new("UNIT_NUM").hash.as_str())
+        );
+    }
+
+    #[test]
+    fn second_insert_of_same_dataset_does_not_lead_to_second_entry_in_dataset_table() {
+        let database_settings = retrieve_settings_from_file_and_override_schema();
+        let abcd_fields = create_abcd_fields_from_json(&json!([
+            {
+                "name": "DS_TEXT",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+            {
+                "name": "DS_NUM",
+                "numeric": true,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+            {
+                "name": "UNIT_TEXT",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": false,
+                "unit": ""
+            },
+            {
+                "name": "UNIT_NUM",
+                "numeric": true,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": false,
+                "unit": ""
+            },
+        ]));
+
+        let mut database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+
+        database_sink
+            .insert_dataset(&AbcdResult {
+                dataset_id: "TEST_ID".to_string(),
+                dataset_path: "TEST_PATH".to_string(),
+                landing_page: "TEST_LANDING_PAGE".to_string(),
+                provider_name: "TEST_PROVIDER".to_string(),
+                dataset: {
+                    let mut values = HashMap::new();
+                    values.insert("DS_TEXT".into(), "FOOBAR".into());
+                    values.insert("DS_NUM".into(), 42.0.into());
+                    values
+                },
+                units: vec![{
+                    let mut values = HashMap::new();
+                    values.insert("UNIT_TEXT".into(), "FOO".into());
+                    values.insert("UNIT_NUM".into(), 13.0.into());
+                    values
+                }],
+            })
+            .unwrap();
+
+        database_sink
+            .insert_dataset(&AbcdResult {
+                dataset_id: "TEST_ID".to_string(),
+                dataset_path: "TEST_PATH".to_string(),
+                landing_page: "TEST_LANDING_PAGE".to_string(),
+                provider_name: "TEST_PROVIDER".to_string(),
+                dataset: {
+                    let mut values = HashMap::new();
+                    values.insert("DS_TEXT".into(), "FOOBAR".into());
+                    values.insert("DS_NUM".into(), 42.0.into());
+                    values
+                },
+                units: vec![{
+                    let mut values = HashMap::new();
+                    values.insert("UNIT_TEXT".into(), "BAR".into());
+                    values.insert("UNIT_NUM".into(), 37.0.into());
+                    values
+                }],
+            })
+            .unwrap();
+
+        assert_eq!(
+            1,
+            number_of_entries(&database_sink, &database_settings.temp_dataset_table)
+        );
+        assert_eq!(
+            2,
+            number_of_entries(&database_sink, &database_settings.temp_unit_table)
+        );
+    }
+
+    #[test]
+    fn correct_tables_after_schema_migration() {
+        let mut database_settings = retrieve_settings_from_file_and_override_schema();
+        database_settings.unit_indexed_columns = vec![];
+
+        let abcd_fields = create_abcd_fields_from_json(&json!([]));
+
+        let mut database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+
+        database_sink
+            .insert_dataset(&AbcdResult {
+                dataset_id: "TEST_ID".to_string(),
+                dataset_path: "TEST_PATH".to_string(),
+                landing_page: "TEST_LANDING_PAGE".to_string(),
+                provider_name: "TEST_PROVIDER".to_string(),
+                dataset: Default::default(),
+                units: vec![],
+            })
+            .unwrap();
+
+        database_sink.migrate_schema().unwrap();
+
+        let tables = retrieve_ordered_table_names(&database_sink);
+
+        assert_eq!(
+            tables,
+            sorted_vec(vec![
+                database_settings.dataset_table.clone(),
+                database_settings.unit_table.clone(),
+                format!("{}_translation", database_settings.dataset_table),
+                database_settings.listing_view.clone(),
+            ])
+        );
+    }
+
+    #[test]
+    fn listing_view_contains_entry_after_migration() {
+        let mut database_settings = retrieve_settings_from_file_and_override_schema();
+        database_settings.unit_indexed_columns = vec![];
+
+        let abcd_fields = create_abcd_fields_from_json(&json!([
+            {
+                "name": "/DataSets/DataSet/Metadata/Description/Representation/Title",
+                "numeric": false,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": true,
+                "unit": ""
+            },
+            {
+                "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal",
+                "numeric": true,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": false,
+                "unit": ""
+            },
+            {
+                "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal",
+                "numeric": true,
+                "vatMandatory": false,
+                "gfbioMandatory": true,
+                "globalField": false,
+                "unit": ""
+            },
+        ]));
+
+        let mut database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+
+        database_sink
+            .insert_dataset(&AbcdResult {
+                dataset_id: "TEST_ID".to_string(),
+                dataset_path: "TEST_PATH".to_string(),
+                landing_page: "TEST_LANDING_PAGE".to_string(),
+                provider_name: "TEST_PROVIDER".to_string(),
+                dataset: {
+                        let mut values = HashMap::new();
+                        values.insert("/DataSets/DataSet/Metadata/Description/Representation/Title".into(), "FOOBAR".into());
+                        values
+                },
+                units: vec![
+                    {
+                        let mut values = HashMap::new();
+                        values.insert("/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal".into(), 10.0.into());
+                        values.insert("/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal".into(), 20.0.into());
+                        values
+                    },
+                ],
+            })
+            .unwrap();
+
+        database_sink.migrate_schema().unwrap();
+
+        retrieve_ordered_table_column_names(&database_sink, &database_settings.listing_view);
+
+        let rows = database_sink
+            .connection
+            .query(
+                &format!(
+                    r#"SELECT * FROM pg_temp.{LISTING_VIEW}"#,
+                    LISTING_VIEW = database_settings.listing_view
+                ),
+                &[],
+            )
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+
+        let row = rows.iter().next().unwrap();
+        assert_eq!(row.get::<_, String>("dataset"), "FOOBAR");
+        assert_eq!(row.get::<_, String>("id"), "TEST_ID");
+        assert_eq!(row.get::<_, String>("link"), "TEST_LANDING_PAGE");
+        assert_eq!(row.get::<_, String>("provider"), "TEST_PROVIDER");
+        assert!(row.get::<_, bool>("isGeoReferenced"));
+    }
+
+    fn retrieve_rows(database_sink: &mut DatabaseSink, table_name: &str) -> Rows {
+        database_sink
+            .connection
+            .query(
+                &format!(r#"SELECT * FROM pg_temp.{TABLE}"#, TABLE = table_name,),
+                &[],
+            )
+            .unwrap()
+    }
+
+    fn number_of_entries(database_sink: &DatabaseSink, table_name: &str) -> i32 {
+        database_sink
+            .connection
+            .query(
+                &format!(
+                    "select count(*)::integer as total from pg_temp.{}",
+                    table_name
+                ),
+                &[],
+            )
+            .unwrap()
+            .get(0)
+            .get("total")
+    }
+
+    fn retrieve_translation_table_keys(
+        database_settings: &DatabaseSettings,
+        database_sink: &DatabaseSink,
+    ) -> Vec<String> {
+        sorted_vec(
+            database_sink
+                .connection
+                .query(
+                    &format!(
+                        "select name from pg_temp.{}_translation;",
+                        database_settings.temp_dataset_table,
+                    ),
+                    &[],
+                )
+                .unwrap()
+                .iter()
+                .map(|row| row.get("name"))
+                .collect::<Vec<String>>(),
+        )
+    }
+
+    fn retrieve_translation_table_values(
+        database_settings: &DatabaseSettings,
+        database_sink: &DatabaseSink,
+    ) -> Vec<String> {
+        sorted_vec(
+            database_sink
+                .connection
+                .query(
+                    &format!(
+                        "select hash from pg_temp.{}_translation;",
+                        database_settings.temp_dataset_table,
+                    ),
+                    &[],
+                )
+                .unwrap()
+                .iter()
+                .map(|row| row.get("hash"))
+                .collect::<Vec<String>>(),
+        )
+    }
+
+    fn sorted_vec<T>(mut vec: Vec<T>) -> Vec<T>
+    where
+        T: Ord,
+    {
+        vec.sort();
+        vec
+    }
+
+    fn retrieve_ordered_table_names(database_sink: &DatabaseSink) -> Vec<String> {
+        let mut tables = database_sink
+            .connection
+            .query(
+                r#"
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = (SELECT nspname FROM pg_namespace WHERE oid = pg_my_temp_schema())
+                    ;
+                "#,
+                &[],
+            )
+            .unwrap()
+            .iter()
+            .map(|row| row.get("table_name"))
+            .collect::<Vec<String>>();
+
+        tables.sort();
+
+        tables
+    }
+
+    fn retrieve_ordered_table_column_names(
+        database_sink: &DatabaseSink,
+        table_name: &str,
+    ) -> Vec<String> {
+        let mut tables = database_sink
+            .connection
+            .query(
+                r#"
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = (SELECT nspname FROM pg_namespace WHERE oid = pg_my_temp_schema())
+                      AND table_name = $1
+                    ;
+                "#,
+                &[&table_name.to_string()],
+            )
+            .unwrap()
+            .iter()
+            .map(|row| row.get("column_name"))
+            .collect::<Vec<String>>();
+
+        tables.sort();
+
+        tables
+    }
+
+    fn retrieve_settings_from_file_and_override_schema() -> DatabaseSettings {
+        let mut settings = Settings::new(None).unwrap().database;
+        settings.schema = "pg_temp".into();
+        settings
+    }
+
+    fn create_abcd_fields_from_json(json: &serde_json::Value) -> AbcdFields {
+        let fields_file = test_utils::create_temp_file(&json.to_string());
+
+        AbcdFields::from_path(&fields_file).expect("Unable to create ABCD Fields Spec")
+    }
+
+    fn extract_dataset_fields(abcd_fields: &AbcdFields) -> Vec<Field> {
+        abcd_fields
+            .into_iter()
+            .filter(|field| field.global_field)
+            .map(|field| field.name.as_ref())
+            .map(Field::new)
+            .collect()
+    }
+
+    fn extract_unit_fields(abcd_fields: &AbcdFields) -> Vec<Field> {
+        abcd_fields
+            .into_iter()
+            .filter(|field| !field.global_field)
+            .map(|field| field.name.as_ref())
+            .map(Field::new)
+            .collect()
+    }
 }

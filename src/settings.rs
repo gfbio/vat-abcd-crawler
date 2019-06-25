@@ -40,6 +40,7 @@ pub struct DatabaseSettings {
     pub dataset_table: String,
     pub listing_view: String,
     pub temp_dataset_table: String,
+    pub surrogate_key_column: String,
     pub dataset_id_column: String,
     pub dataset_path_column: String,
     pub dataset_landing_page_column: String,

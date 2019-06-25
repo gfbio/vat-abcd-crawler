@@ -19,3 +19,15 @@ impl From<&str> for Field {
         Self::new(name)
     }
 }
+
+impl From<String> for Field {
+    fn from(name: String) -> Self {
+        Self::new(name.as_str())
+    }
+}
+
+impl From<&String> for Field {
+    fn from(name: &String) -> Self {
+        Self::new(name.as_str())
+    }
+}

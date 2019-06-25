@@ -1,0 +1,21 @@
+language: rust
+
+rust:
+  - stable
+
+services:
+  - postgresql
+
+cache: cargo
+
+before_script:
+  - psql -c 'create database travis_ci_test;' -U postgres
+  - echo '[database]
+    database = "travis_ci_test"
+    tls = false
+    user = "postgres"
+    password = ""' > settings.toml
+
+script:
+  - cargo build --verbose --all
+  - cargo test --verbose --all

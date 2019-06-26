@@ -495,8 +495,6 @@ impl<'s> DatabaseSink<'s> {
             longitude_column = longitude_column,
         );
 
-        eprintln!("{}", &view_statement);
-
         transaction.execute(&view_statement, &[])?;
 
         Ok(())

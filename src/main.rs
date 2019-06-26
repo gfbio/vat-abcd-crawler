@@ -87,9 +87,22 @@ fn process_datasets(
                 .unwrap_or(std::usize::MAX),
         )
     {
-        let file_path = temp_dir.path().join(dataset.id()).join(".zip");
+        let file_name = dataset
+            .id()
+            .chars()
+            .map(|c| match c {
+                'a'...'z' | 'A'...'Z' | '-' => c,
+                _ => '_',
+            })
+            .collect::<String>();
+        let file_path = temp_dir.path().join(file_name).with_extension("zip");
         if let Err(e) = FileDownloader::from_url(dataset.download_url()).to_path(&file_path) {
-            warn!("Unable to download file: {}", e);
+            warn!(
+                "Unable to download file {url} to {path}: {error}",
+                url = dataset.download_url(),
+                path = file_path.display(),
+                error = e,
+            );
             continue;
         }
 
@@ -104,7 +117,15 @@ fn process_datasets(
         let landing_page_url: String =
             propose_landing_page(&settings.terminology_service, dataset.download_url());
 
-        for xml_bytes_result in ArchiveReader::from_path(&file_path).unwrap().bytes_iter() {
+        let mut archive_reader = match ArchiveReader::from_path(&file_path) {
+            Ok(reader) => reader,
+            Err(e) => {
+                warn!("Unable to read dataset archive: {}", e);
+                continue;
+            }
+        };
+
+        for xml_bytes_result in archive_reader.bytes_iter() {
             let xml_bytes = match xml_bytes_result {
                 Ok(bytes) => bytes,
                 Err(e) => {
@@ -156,7 +177,7 @@ fn initialize_settings() -> Result<Settings, Error> {
                 .long("settings")
                 .value_name("SETTINGS")
                 .help("Specify the settings file")
-                .required(true)
+                .required(false)
                 .takes_value(true),
         )
         .get_matches();

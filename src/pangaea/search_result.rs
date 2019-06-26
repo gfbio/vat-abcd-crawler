@@ -1,5 +1,6 @@
 use crate::settings::PangaeaSettings;
 use failure::Error;
+use log::info;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -90,13 +91,20 @@ impl PangaeaSearchResult {
         let mut entries = Vec::new();
 
         let mut result = Self::from_url(&pangaea_settings.search_url)?;
+        let mut number_of_results = result.hits.hits.len();
 
-        while result.hits.total > 0 {
+        while number_of_results > 0 {
+            info!(
+                "Retrieved {} items from pangaea (continuing - {} total).",
+                number_of_results, result.hits.total,
+            );
             entries.append(&mut result.hits.hits);
 
             result = Self::from_scroll_url(&pangaea_settings.scroll_url, &result.scroll_id)?;
+            number_of_results = result.hits.hits.len();
         }
 
+        info!("Retrieved {} items from pangaea.", number_of_results);
         entries.append(&mut result.hits.hits);
 
         Ok(entries)
@@ -292,8 +300,8 @@ mod tests {
                 "_scroll_id": SCROLL_ID_2,
                 "took": 1373,
                 "hits": {
-                    "total": SEARCH_RESULT_HITS, // <-- CONTINUE
-                    "hits": [
+                    "total": SEARCH_RESULT_HITS,
+                    "hits": [  // <-- CONTINUE
                         SEARCH_RESULT_ENTRY_JSON(),
                         SEARCH_RESULT_ENTRY_JSON_2(),
                     ],
@@ -313,10 +321,8 @@ mod tests {
                 "_scroll_id": SCROLL_ID_2,
                 "took": 1373,
                 "hits": {
-                    "total": 0, // <-- NO CONTINUE
-                    "hits": [
-                        SEARCH_RESULT_ENTRY_JSON(),
-                    ],
+                    "total": SEARCH_RESULT_HITS,
+                    "hits": [],  // <-- NO CONTINUE
                 },
             })
             .to_string(),
@@ -330,7 +336,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(5, entries.len());
+        assert_eq!(4, entries.len());
 
         let entry = &entries[0];
         assert_eq!(RESULT_ID, entry.id());

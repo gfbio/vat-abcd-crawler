@@ -12,7 +12,7 @@ landing_page_field = "/DataSets/DataSet/Metadata/Description/Representation/URI"
 
 [pangaea]
 search_url = "https://ws.pangaea.de/es/dataportal-gfbio/pansimple/_search"
-scroll_url = "https://ws.pangaea.de/es/dataportal-gfbio/pansimple/_search/scroll"
+scroll_url = "https://ws.pangaea.de/es/_search/scroll"
 
 [terminology_service]
 landingpage_url = "https://terminologies.gfbio.org/tools/landingpages/landingpage.php"

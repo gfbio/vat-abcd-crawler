@@ -3,9 +3,9 @@ use failure::{Error, Fail};
 use log::debug;
 use postgres::params::ConnectParams;
 use postgres::params::Host;
-use postgres::tls::openssl::OpenSsl;
 use postgres::transaction::Transaction;
 use postgres::{Connection, TlsMode};
+use postgres_openssl::OpenSsl;
 
 use crate::abcd::{AbcdFields, AbcdResult};
 use crate::settings;

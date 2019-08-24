@@ -235,6 +235,7 @@ mod tests {
         let abcd_settings = AbcdSettings {
             fields_file: "".into(),
             landing_page_field: "/DataSets/DataSet/Metadata/Description/Representation/URI".into(),
+            storage_dir: "raw_data".into(),
         };
 
         let test_file = create_file_as_bytes();

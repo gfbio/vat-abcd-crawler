@@ -28,6 +28,11 @@ impl ArchiveReader {
             archive: &mut self.archive,
         }
     }
+
+    /// Output the number of files in the archive.
+    pub fn len(&self) -> usize {
+        self.archive.len()
+    }
 }
 
 /// This iterator traverses over all files (bytes) in the ZIP archive.

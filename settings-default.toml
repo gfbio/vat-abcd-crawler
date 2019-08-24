@@ -9,6 +9,7 @@ dataset_limit = 3
 [abcd]
 fields_file = "abcd-fields.json"
 landing_page_field = "/DataSets/DataSet/Metadata/Description/Representation/URI"
+storage_dir = "raw_data"
 
 [pangaea]
 search_url = "https://ws.pangaea.de/es/dataportal-gfbio/pansimple/_search"

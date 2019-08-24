@@ -15,6 +15,7 @@ pub struct GeneralSettings {
 pub struct AbcdSettings {
     pub fields_file: String,
     pub landing_page_field: String,
+    pub storage_dir: String,
 }
 
 #[derive(Debug, Deserialize)]

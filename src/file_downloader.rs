@@ -15,6 +15,13 @@ impl FileDownloader {
     pub fn to_path(&self, path: &Path) -> Result<(), Error> {
         let mut response = reqwest::get(&self.url)?;
 
+        if !response.status().is_success() {
+            return Err(failure::err_msg(format!(
+                "Webserver responded with code: {}",
+                response.status(),
+            )));
+        }
+
         let output_file = File::create(&path)?;
 
         let mut writer = BufWriter::new(&output_file);

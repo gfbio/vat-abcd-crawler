@@ -67,6 +67,9 @@ fn process_datasets(
     datasets: &[PangaeaSearchResultEntry],
 ) -> Result<(), Error> {
     let temp_dir = tempfile::tempdir()?;
+    let storage_dir = Path::new(&settings.abcd.storage_dir);
+
+    create_or_check_for_directory(&storage_dir);
 
     let mut abcd_parser = AbcdParser::new(&settings.abcd, &abcd_fields);
 
@@ -91,22 +94,37 @@ fn process_datasets(
             .id()
             .chars()
             .map(|c| match c {
-                'a'...'z' | 'A'...'Z' | '-' => c,
+                'a'..='z' | 'A'..='Z' | '-' => c,
                 _ => '_',
             })
             .collect::<String>();
-        let file_path = temp_dir.path().join(file_name).with_extension("zip");
-        if let Err(e) = FileDownloader::from_url(dataset.download_url()).to_path(&file_path) {
+        let temp_file_path = temp_dir.path().join(&file_name).with_extension("zip");
+        let storage_file_path = storage_dir.join(&file_name).with_extension("zip");
+
+        if let Err(e) = FileDownloader::from_url(dataset.download_url()).to_path(&temp_file_path) {
             warn!(
                 "Unable to download file {url} to {path}: {error}",
                 url = dataset.download_url(),
-                path = file_path.display(),
+                path = temp_file_path.display(),
                 error = e,
             );
-            continue;
+
+            let recovery_file_path = storage_file_path.as_path();
+            match std::fs::copy(recovery_file_path, &temp_file_path) {
+                Ok(_) => info!("Recovered file {file}", file = file_name),
+                Err(e) => {
+                    warn!(
+                        "Recovery of file {file} failed: {error}",
+                        file = file_name,
+                        error = e,
+                    );
+
+                    continue; // skip processing this dataset
+                }
+            };
         }
 
-        trace!("Temp file: {}", file_path.display());
+        trace!("Temp file: {}", temp_file_path.display());
         info!(
             "Processing `{}` @ `{}` ({})",
             dataset.id(),
@@ -117,7 +135,7 @@ fn process_datasets(
         let landing_page_url: String =
             propose_landing_page(&settings.terminology_service, dataset.download_url());
 
-        let mut archive_reader = match ArchiveReader::from_path(&file_path) {
+        let mut archive_reader = match ArchiveReader::from_path(&temp_file_path) {
             Ok(reader) => reader,
             Err(e) => {
                 warn!("Unable to read dataset archive: {}", e);
@@ -125,11 +143,14 @@ fn process_datasets(
             }
         };
 
+        let mut all_inserts_successful = true;
+
         for xml_bytes_result in archive_reader.bytes_iter() {
             let xml_bytes = match xml_bytes_result {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     warn!("Unable to read file from zip archive: {}", e);
+                    all_inserts_successful = false;
                     continue;
                 }
             };
@@ -144,6 +165,7 @@ fn process_datasets(
                 Ok(data) => data,
                 Err(e) => {
                     warn!("Unable to retrieve ABCD data: {}", e);
+                    all_inserts_successful = false;
                     continue;
                 }
             };
@@ -152,8 +174,17 @@ fn process_datasets(
 
             match database_sink.insert_dataset(&abcd_data) {
                 Ok(_) => (),
-                Err(e) => warn!("Unable to insert dataset into storage: {}", e),
+                Err(e) => {
+                    warn!("Unable to insert dataset into storage: {}", e);
+                    all_inserts_successful = false;
+                }
             };
+        }
+
+        if all_inserts_successful && archive_reader.len() > 0 {
+            if let Err(e) = std::fs::copy(&temp_file_path, storage_file_path) {
+                warn!("Unable to store ABCD file: {}", e);
+            }
         }
     }
 
@@ -163,6 +194,17 @@ fn process_datasets(
     };
 
     Ok(())
+}
+
+fn create_or_check_for_directory(storage_dir: &&Path) {
+    if storage_dir.exists() {
+        assert!(
+            storage_dir.is_dir(),
+            "ABCD storage directory path is not a directory",
+        );
+    } else {
+        std::fs::create_dir(&storage_dir).expect("ABCD storage directory is not creatable");
+    }
 }
 
 fn initialize_settings() -> Result<Settings, Error> {
@@ -189,7 +231,7 @@ fn initialize_settings() -> Result<Settings, Error> {
 
 /// Initialize the logger.
 fn initialize_logger(file_path: &Path, settings: &Settings) -> Result<(), Error> {
-    let mut loggers: Vec<Box<SharedLogger>> = Vec::new();
+    let mut loggers: Vec<Box<dyn SharedLogger>> = Vec::new();
 
     let log_level = if settings.general.debug {
         simplelog::LevelFilter::Debug

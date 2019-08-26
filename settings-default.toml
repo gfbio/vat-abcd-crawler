@@ -8,11 +8,15 @@ dataset_limit = 3
 
 [abcd]
 fields_file = "abcd-fields.json"
+landing_page_field = "/DataSets/DataSet/Metadata/Description/Representation/URI"
+storage_dir = "raw_data"
 
-[bms]
-monitor_url = "http://bms.gfbio.org/services/xml-archives/?provider=&dsa="
-provider_url = "https://bms.gfbio.org/services/providers/?provider=&name="
-landing_page_url = "http://bms.gfbio.org/services/landingpages/?output=json"
+[pangaea]
+search_url = "https://ws.pangaea.de/es/dataportal-gfbio/pansimple/_search"
+scroll_url = "https://ws.pangaea.de/es/_search/scroll"
+
+[terminology_service]
+landingpage_url = "https://terminologies.gfbio.org/tools/landingpages/landingpage.php"
 
 [database]
 host = "localhost"
@@ -22,14 +26,15 @@ database = ""
 user = ""
 password = ""
 schema = ""
-dataset_table = ""
-temp_dataset_table = ""
+dataset_table = "abcd_datasets"
+temp_dataset_table = "abcd_datasets_temp"
+surrogate_key_column = "surrogate_key"
 dataset_id_column = "dataset_id"
 dataset_path_column = "dataset_path"
 dataset_landing_page_column = "dataset_landing_page"
 dataset_provider_column = "dataset_provider"
-unit_table = ""
-temp_unit_table = ""
+unit_table = "abcd_units"
+temp_unit_table = "abcd_units_temp"
 listing_view = "dataset_listing"
 unit_indexed_columns = [
     "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal",

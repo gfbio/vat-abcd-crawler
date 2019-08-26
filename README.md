@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/gfbio/vat-abcd-crawler.svg?branch=master)](https://travis-ci.org/gfbio/vat-abcd-crawler)
+
 # VAT ABCD Crawler
 
 This repository contains the ABCD crawler for the VAT system.

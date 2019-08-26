@@ -1,0 +1,32 @@
+language: rust
+
+rust:
+  - stable
+
+services:
+  - postgresql
+
+addons:
+  postgresql: "11.2"
+
+cache: cargo
+
+before_install:
+  - sudo apt-get update
+  - sudo apt-get --yes remove postgresql\*
+  - sudo apt-get install -y postgresql-11 postgresql-client-11
+  - sudo cp /etc/postgresql/{9.6,11}/main/pg_hba.conf
+  - sudo service postgresql restart 11
+
+before_script:
+  - psql -c 'create database travis_ci_test;' -U postgres
+  - touch settings.toml
+  - echo '[database]' >> settings.toml
+  - echo 'database = "travis_ci_test"' >> settings.toml
+  - echo 'tls = false' >> settings.toml
+  - echo 'user = "postgres"' >> settings.toml
+  - echo 'password = ""' >> settings.toml
+
+script:
+  - cargo build --verbose --all
+  - cargo test --verbose --all

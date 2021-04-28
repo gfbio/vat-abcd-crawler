@@ -42,7 +42,7 @@ impl PangaeaSearchResult {
                     "filter": [
                         {
                             "term": {
-                                "internal-source": "gfbio-abcd-collections"
+                                "internal-source": "gfbio-abcd-push"
                             }
                         },
                         {

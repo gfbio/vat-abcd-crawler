@@ -1,11 +1,11 @@
+use std::io::Write;
+
 use csv::WriterBuilder;
 use failure::{Error, Fail};
 use log::debug;
-use postgres::params::ConnectParams;
-use postgres::params::Host;
-use postgres::transaction::Transaction;
-use postgres::{Connection, TlsMode};
-use postgres_openssl::OpenSsl;
+use openssl::ssl::{SslConnector, SslMethod};
+use postgres::{config::SslMode, Client, Config, IsolationLevel, NoTls, Transaction};
+use postgres_openssl::MakeTlsConnector;
 
 use crate::abcd::{AbcdFields, AbcdResult};
 use crate::settings;
@@ -17,7 +17,7 @@ const POSTGRES_CSV_CONFIGURATION: &str =
 
 /// A PostgreSQL storage DAO for storing datasets.
 pub struct DatabaseSink<'s> {
-    connection: Connection,
+    connection: Client,
     database_settings: &'s settings::DatabaseSettings,
     dataset_fields: Vec<Field>,
     surrogate_key: SurrogateKey,
@@ -48,27 +48,26 @@ impl<'s> DatabaseSink<'s> {
         Ok(sink)
     }
 
-    fn create_database_connection(
-        database_settings: &DatabaseSettings,
-    ) -> Result<Connection, Error> {
-        let connection_params = ConnectParams::builder()
-            .user(&database_settings.user, Some(&database_settings.password))
+    fn create_database_connection(database_settings: &DatabaseSettings) -> Result<Client, Error> {
+        let mut connection_params = Config::new();
+        connection_params
+            .user(&database_settings.user)
+            .password(&database_settings.password)
             .port(database_settings.port)
-            .database(&database_settings.database)
-            .build(Host::Tcp(database_settings.host.clone()));
+            .dbname(&database_settings.database)
+            .host(&database_settings.host)
+            .ssl_mode(SslMode::Prefer);
 
-        let negotiator = if database_settings.tls {
-            Some(OpenSsl::new()?)
+        let connection = if database_settings.tls {
+            let mut builder = SslConnector::builder(SslMethod::tls())?;
+            builder.set_ca_file("database_cert.pem")?;
+            let connector = MakeTlsConnector::new(builder.build());
+            connection_params.connect(connector)?
         } else {
-            None
-        };
-        let tls_mode = if let Some(ref negotiator) = negotiator {
-            TlsMode::Prefer(negotiator)
-        } else {
-            TlsMode::None
+            connection_params.connect(NoTls)?
         };
 
-        Ok(Connection::connect(connection_params, tls_mode)?)
+        Ok(connection)
     }
 
     fn create_lists_of_dataset_and_unit_fields(
@@ -104,14 +103,12 @@ impl<'s> DatabaseSink<'s> {
     /// Create and fill a temporary mapping table from hashes to field names.
     fn create_and_fill_temporary_mapping_table(&mut self) -> Result<(), Error> {
         // create table
-        self.connection.execute(
-            &format!(
-                "create table {schema}.{table}_translation (name text not null, hash text not null);",
-                schema = self.database_settings.schema,
-                table = self.database_settings.temp_dataset_table
-            ),
-            &[],
-        )?;
+        let statement = self.connection.prepare(&format!(
+            "create table {schema}.{table}_translation (name text not null, hash text not null);",
+            schema = self.database_settings.schema,
+            table = self.database_settings.temp_dataset_table
+        ))?;
+        self.connection.execute(&statement, &[])?;
 
         // fill table
         let statement = self.connection.prepare(&format!(
@@ -120,7 +117,8 @@ impl<'s> DatabaseSink<'s> {
             table = self.database_settings.temp_dataset_table
         ))?;
         for field in self.dataset_fields.iter().chain(&self.unit_fields) {
-            statement.execute(&[&field.name, &field.hash])?;
+            self.connection
+                .execute(&statement, &[&field.name, &field.hash])?;
         }
 
         Ok(())
@@ -156,15 +154,13 @@ impl<'s> DatabaseSink<'s> {
             ));
         }
 
-        self.connection.execute(
-            &format!(
-                "CREATE TABLE {schema}.{table} ( {fields} );",
-                schema = &self.database_settings.schema,
-                table = self.database_settings.temp_unit_table,
-                fields = fields.join(",")
-            ),
-            &[],
-        )?;
+        let statement = self.connection.prepare(&format!(
+            "CREATE TABLE {schema}.{table} ( {fields} );",
+            schema = &self.database_settings.schema,
+            table = self.database_settings.temp_unit_table,
+            fields = fields.join(",")
+        ))?;
+        self.connection.execute(&statement, &[])?;
 
         Ok(())
     }
@@ -214,15 +210,13 @@ impl<'s> DatabaseSink<'s> {
             ));
         }
 
-        self.connection.execute(
-            &format!(
-                "CREATE TABLE {schema}.{table} ( {fields} );",
-                schema = &self.database_settings.schema,
-                table = self.database_settings.temp_dataset_table,
-                fields = fields.join(",")
-            ),
-            &[],
-        )?;
+        let statement = self.connection.prepare(&format!(
+            "CREATE TABLE {schema}.{table} ( {fields} );",
+            schema = &self.database_settings.schema,
+            table = self.database_settings.temp_dataset_table,
+            fields = fields.join(",")
+        ))?;
+        self.connection.execute(&statement, &[])?;
 
         Ok(())
     }
@@ -249,7 +243,8 @@ impl<'s> DatabaseSink<'s> {
                 table = &self.database_settings.temp_dataset_table
             ),
         ] {
-            self.connection.execute(statement, &[])?;
+            let statement = self.connection.prepare(statement)?;
+            self.connection.execute(&statement, &[])?;
         }
 
         Ok(())
@@ -260,19 +255,25 @@ impl<'s> DatabaseSink<'s> {
     pub fn migrate_schema(&mut self) -> Result<(), Error> {
         self.create_indexes_and_statistics()?;
 
-        let transaction = self.connection.transaction_with(
-            postgres::transaction::Config::new()
-                .isolation_level(postgres::transaction::IsolationLevel::Serializable)
-                .read_only(false),
+        let mut transaction = self
+            .connection
+            .build_transaction()
+            .isolation_level(IsolationLevel::Serializable)
+            .read_only(false)
+            .start()?;
+
+        Self::drop_old_tables(self.database_settings, &mut transaction)?;
+
+        Self::rename_temporary_tables(self.database_settings, &mut transaction)?;
+
+        Self::rename_constraints_and_indexes(self.database_settings, &mut transaction)?;
+
+        Self::create_listing_view(
+            self.database_settings,
+            &self.dataset_fields,
+            &self.unit_fields,
+            &mut transaction,
         )?;
-
-        self.drop_old_tables(&transaction)?;
-
-        self.rename_temporary_tables(&transaction)?;
-
-        self.rename_constraints_and_indexes(&transaction)?;
-
-        self.create_listing_view(&transaction)?;
 
         transaction.commit()?;
 
@@ -280,93 +281,105 @@ impl<'s> DatabaseSink<'s> {
     }
 
     /// Drop old persistent tables.
-    fn drop_old_tables(&self, transaction: &Transaction) -> Result<(), Error> {
+    fn drop_old_tables(
+        database_settings: &settings::DatabaseSettings,
+        transaction: &mut Transaction,
+    ) -> Result<(), Error> {
         for statement in &[
             // listing view
             format!(
                 "DROP VIEW IF EXISTS {schema}.{view_name};",
-                schema = self.database_settings.schema,
-                view_name = self.database_settings.listing_view
+                schema = database_settings.schema,
+                view_name = database_settings.listing_view
             ),
             // unit table
             format!(
                 "DROP TABLE IF EXISTS {schema}.{table};",
-                schema = self.database_settings.schema,
-                table = self.database_settings.unit_table
+                schema = database_settings.schema,
+                table = database_settings.unit_table
             ),
             // dataset table
             format!(
                 "DROP TABLE IF EXISTS {schema}.{table};",
-                schema = self.database_settings.schema,
-                table = self.database_settings.dataset_table
+                schema = database_settings.schema,
+                table = database_settings.dataset_table
             ),
             // translation table
             format!(
                 "DROP TABLE IF EXISTS {schema}.{table}_translation;",
-                schema = self.database_settings.schema,
-                table = self.database_settings.dataset_table
+                schema = database_settings.schema,
+                table = database_settings.dataset_table
             ),
         ] {
-            transaction.execute(statement, &[])?;
+            let statement = transaction.prepare(statement)?;
+            transaction.execute(&statement, &[])?;
         }
 
         Ok(())
     }
 
     /// Rename temporary tables to persistent tables.
-    fn rename_temporary_tables(&self, transaction: &Transaction) -> Result<(), Error> {
+    fn rename_temporary_tables(
+        database_settings: &settings::DatabaseSettings,
+        transaction: &mut Transaction,
+    ) -> Result<(), Error> {
         for statement in &[
             // unit table
             format!(
                 "ALTER TABLE {schema}.{temp_table} RENAME TO {table};",
-                schema = self.database_settings.schema,
-                temp_table = self.database_settings.temp_unit_table,
-                table = self.database_settings.unit_table
+                schema = database_settings.schema,
+                temp_table = database_settings.temp_unit_table,
+                table = database_settings.unit_table
             ),
             // dataset table
             format!(
                 "ALTER TABLE {schema}.{temp_table} RENAME TO {table};",
-                schema = self.database_settings.schema,
-                temp_table = self.database_settings.temp_dataset_table,
-                table = self.database_settings.dataset_table
+                schema = database_settings.schema,
+                temp_table = database_settings.temp_dataset_table,
+                table = database_settings.dataset_table
             ),
             // translation table
             format!(
                 "ALTER TABLE {schema}.{temp_table}_translation RENAME TO {table}_translation;",
-                schema = self.database_settings.schema,
-                temp_table = self.database_settings.temp_dataset_table,
-                table = self.database_settings.dataset_table
+                schema = database_settings.schema,
+                temp_table = database_settings.temp_dataset_table,
+                table = database_settings.dataset_table
             ),
         ] {
-            transaction.execute(statement, &[])?;
+            let statement = transaction.prepare(statement)?;
+            transaction.execute(&statement, &[])?;
         }
 
         Ok(())
     }
 
     /// Rename constraints and indexes from temporary to persistent.
-    fn rename_constraints_and_indexes(&self, transaction: &Transaction) -> Result<(), Error> {
+    fn rename_constraints_and_indexes(
+        database_settings: &settings::DatabaseSettings,
+        transaction: &mut Transaction,
+    ) -> Result<(), Error> {
         for statement in &[
             // foreign key
             format!(
                 "ALTER TABLE {schema}.{table} \
                  RENAME CONSTRAINT {temp_prefix}_{temp_suffix}_fk TO {prefix}_{suffix}_fk;",
-                schema = &self.database_settings.schema,
-                table = &self.database_settings.unit_table,
-                temp_prefix = &self.database_settings.temp_unit_table,
-                temp_suffix = &self.database_settings.surrogate_key_column,
-                prefix = &self.database_settings.unit_table,
-                suffix = &self.database_settings.surrogate_key_column
+                schema = &database_settings.schema,
+                table = &database_settings.unit_table,
+                temp_prefix = &database_settings.temp_unit_table,
+                temp_suffix = &database_settings.surrogate_key_column,
+                prefix = &database_settings.unit_table,
+                suffix = &database_settings.surrogate_key_column
             ),
             // index
             format!(
                 "ALTER INDEX {schema}.{temp_index}_idx RENAME TO {index}_idx;",
-                schema = &self.database_settings.schema,
-                temp_index = &self.database_settings.temp_unit_table,
-                index = &self.database_settings.unit_table
+                schema = &database_settings.schema,
+                temp_index = &database_settings.temp_unit_table,
+                index = &database_settings.unit_table
             ),
         ] {
-            transaction.execute(statement, &[])?;
+            let statement = transaction.prepare(statement)?;
+            transaction.execute(&statement, &[])?;
         }
 
         Ok(())
@@ -384,7 +397,9 @@ impl<'s> DatabaseSink<'s> {
             dataset_table = &self.database_settings.temp_dataset_table
         );
         debug!("{}", &foreign_key_statement);
+        let foreign_key_statement = self.connection.prepare(&foreign_key_statement)?;
         self.connection.execute(&foreign_key_statement, &[])?;
+
         let indexed_unit_column_names = self
             .database_settings
             .unit_indexed_columns
@@ -411,37 +426,49 @@ impl<'s> DatabaseSink<'s> {
             },
         );
         debug!("{}", &unit_index_statement);
+        let unit_index_statement = self.connection.prepare(&unit_index_statement)?;
         self.connection.execute(&unit_index_statement, &[])?;
+
         let cluster_statement = format!(
             "CLUSTER {unit_table}_idx ON {schema}.{unit_table};",
             schema = &self.database_settings.schema,
             unit_table = &self.database_settings.temp_unit_table
         );
         debug!("{}", &cluster_statement);
+        let cluster_statement = self.connection.prepare(&cluster_statement)?;
         self.connection.execute(&cluster_statement, &[])?;
+
         let datasets_analyze_statement = format!(
             "VACUUM ANALYZE {schema}.{dataset_table};",
             schema = &self.database_settings.schema,
             dataset_table = &self.database_settings.temp_dataset_table
         );
         debug!("{}", &datasets_analyze_statement);
+        let datasets_analyze_statement = self.connection.prepare(&datasets_analyze_statement)?;
         self.connection.execute(&datasets_analyze_statement, &[])?;
+
         let units_analyze_statement = format!(
             "VACUUM ANALYZE {schema}.{unit_table};",
             schema = &self.database_settings.schema,
             unit_table = &self.database_settings.temp_unit_table
         );
         debug!("{}", &units_analyze_statement);
+        let units_analyze_statement = self.connection.prepare(&units_analyze_statement)?;
         self.connection.execute(&units_analyze_statement, &[])?;
 
         Ok(())
     }
 
     /// Create view that provides a listing view
-    pub fn create_listing_view(&self, transaction: &Transaction) -> Result<(), Error> {
+    pub fn create_listing_view(
+        database_settings: &settings::DatabaseSettings,
+        dataset_fields: &[Field],
+        unit_fields: &[Field],
+        transaction: &mut Transaction,
+    ) -> Result<(), Error> {
         // TODO: replace full names with settings call
 
-        let dataset_title = if let Some(field) = self.dataset_fields.iter().find(|field| {
+        let dataset_title = if let Some(field) = dataset_fields.iter().find(|field| {
             field.name == "/DataSets/DataSet/Metadata/Description/Representation/Title"
         }) {
             format!("\"{}\"", field.hash)
@@ -449,7 +476,7 @@ impl<'s> DatabaseSink<'s> {
             "''".to_string()
         };
 
-        let latitude_column = if let Some(field) = self.unit_fields.iter().find(|field| {
+        let latitude_column = if let Some(field) = unit_fields.iter().find(|field| {
             field.name == "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal"
         }) {
             format!("\"{}\"", field.hash)
@@ -457,7 +484,7 @@ impl<'s> DatabaseSink<'s> {
             "NULL".to_string()
         };
 
-        let longitude_column = if let Some(field) = self.unit_fields.iter().find(|field| {
+        let longitude_column = if let Some(field) = unit_fields.iter().find(|field| {
             field.name == "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal"
         }) {
             format!("\"{}\"", field.hash)
@@ -482,19 +509,20 @@ impl<'s> DatabaseSink<'s> {
                             ))                 as isGeoReferenced
                    from {schema}.{dataset_table}
             ) sub);"#,
-            schema = self.database_settings.schema,
-            view_name = self.database_settings.listing_view,
+            schema = database_settings.schema,
+            view_name = database_settings.listing_view,
             dataset_title = dataset_title,
-            dataset_landing_page_column = self.database_settings.dataset_landing_page_column,
-            dataset_id_column = self.database_settings.dataset_id_column,
-            dataset_provider_column = self.database_settings.dataset_provider_column,
-            dataset_table = self.database_settings.dataset_table,
-            unit_table = self.database_settings.unit_table,
-            surrogate_key_column = self.database_settings.surrogate_key_column,
+            dataset_landing_page_column = database_settings.dataset_landing_page_column,
+            dataset_id_column = database_settings.dataset_id_column,
+            dataset_provider_column = database_settings.dataset_provider_column,
+            dataset_table = database_settings.dataset_table,
+            unit_table = database_settings.unit_table,
+            surrogate_key_column = database_settings.surrogate_key_column,
             latitude_column = latitude_column,
             longitude_column = longitude_column,
         );
 
+        let view_statement = transaction.prepare(&view_statement)?;
         transaction.execute(&view_statement, &[])?;
 
         Ok(())
@@ -506,7 +534,7 @@ impl<'s> DatabaseSink<'s> {
             SurrogateKeyType::New(surrogate_key) => {
                 Self::insert_dataset_metadata(
                     &self.database_settings,
-                    &self.connection,
+                    &mut self.connection,
                     self.dataset_fields.as_slice(),
                     abcd_data,
                     surrogate_key,
@@ -524,7 +552,7 @@ impl<'s> DatabaseSink<'s> {
     /// Insert the dataset metadata into the temporary schema
     fn insert_dataset_metadata(
         database_settings: &settings::DatabaseSettings,
-        connection: &Connection,
+        connection: &mut Client,
         dataset_fields: &[Field],
         abcd_data: &AbcdResult,
         id: u32,
@@ -568,11 +596,15 @@ impl<'s> DatabaseSink<'s> {
         );
         // dbg!(&copy_statement);
 
+        let copy_statement = connection.prepare(&copy_statement)?;
+
+        let mut writer = connection.copy_in(&copy_statement)?;
+
         let value_string = values.into_inner()?;
         // dbg!(String::from_utf8_lossy(value_string.as_slice()));
 
-        let statement = connection.prepare(&copy_statement)?;
-        statement.copy_in(&[], &mut value_string.as_slice())?;
+        writer.write_all(value_string.as_slice())?;
+        writer.finish()?;
 
         Ok(())
     }
@@ -615,7 +647,10 @@ impl<'s> DatabaseSink<'s> {
 
         let statement = self.connection.prepare(&copy_statement)?;
         //            dbg!(&value_string);
-        statement.copy_in(&[], &mut values.into_inner()?.as_slice())?;
+
+        let mut writer = self.connection.copy_in(&statement)?;
+        writer.write_all(values.into_inner()?.as_slice())?;
+        writer.finish()?;
 
         Ok(())
     }
@@ -638,7 +673,7 @@ mod tests {
 
     use crate::settings::{DatabaseSettings, Settings};
     use crate::test_utils;
-    use postgres::rows::Rows;
+    use postgres::Row;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -647,9 +682,9 @@ mod tests {
         let database_settings = retrieve_settings_from_file_and_override_schema();
         let abcd_fields = create_abcd_fields_from_json(&json!([]));
 
-        let database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+        let mut database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
 
-        let tables = retrieve_ordered_table_names(&database_sink);
+        let tables = retrieve_ordered_table_names(&mut database_sink);
 
         assert_eq!(
             tables,
@@ -691,10 +726,10 @@ mod tests {
             },
         ]));
 
-        let database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+        let mut database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
 
         let dataset_table_columns = retrieve_ordered_table_column_names(
-            &database_sink,
+            &mut database_sink,
             &database_settings.temp_dataset_table,
         );
 
@@ -752,10 +787,12 @@ mod tests {
             }
         ]));
 
-        let database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+        let mut database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
 
-        let dataset_table_columns =
-            retrieve_ordered_table_column_names(&database_sink, &database_settings.temp_unit_table);
+        let dataset_table_columns = retrieve_ordered_table_column_names(
+            &mut database_sink,
+            &database_settings.temp_unit_table,
+        );
 
         let unit_columns = extract_unit_fields(&abcd_fields)
             .iter()
@@ -797,7 +834,7 @@ mod tests {
             },
         ]));
 
-        let database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+        let mut database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
 
         let expected_translation_table_columns = vec![
             "/DataSets/DataSet/TechnicalContacts/TechnicalContact/Name",
@@ -806,7 +843,7 @@ mod tests {
         ];
 
         let queried_translation_table_columns =
-            retrieve_translation_table_keys(&database_settings, &database_sink);
+            retrieve_translation_table_keys(&database_settings, &mut database_sink);
 
         assert_eq!(
             sorted_vec(expected_translation_table_columns),
@@ -844,17 +881,19 @@ mod tests {
             },
         ]));
 
-        let database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
+        let mut database_sink = DatabaseSink::new(&database_settings, &abcd_fields).unwrap();
 
         let dataset_table_columns = retrieve_ordered_table_column_names(
-            &database_sink,
+            &mut database_sink,
             &database_settings.temp_dataset_table,
         );
-        let unit_table_columns =
-            retrieve_ordered_table_column_names(&database_sink, &database_settings.temp_unit_table);
+        let unit_table_columns = retrieve_ordered_table_column_names(
+            &mut database_sink,
+            &database_settings.temp_unit_table,
+        );
 
         let translation_table_values =
-            retrieve_translation_table_values(&database_settings, &database_sink);
+            retrieve_translation_table_values(&database_settings, &mut database_sink);
 
         for column_name in translation_table_values {
             assert!(
@@ -936,36 +975,36 @@ mod tests {
 
         assert_eq!(
             1,
-            number_of_entries(&database_sink, &database_settings.temp_dataset_table)
+            number_of_entries(&mut database_sink, &database_settings.temp_dataset_table)
         );
         assert_eq!(
             2,
-            number_of_entries(&database_sink, &database_settings.temp_unit_table)
+            number_of_entries(&mut database_sink, &database_settings.temp_unit_table)
         );
 
         let dataset_result =
             retrieve_rows(&mut database_sink, &database_settings.temp_dataset_table);
 
-        let dataset = dataset_result.get(0);
+        let dataset = dataset_result.first().unwrap();
         assert_eq!(
             "TEST_ID",
-            dataset.get::<_, String>(database_settings.dataset_id_column.as_str())
+            dataset.get::<_, &str>(database_settings.dataset_id_column.as_str())
         );
         assert_eq!(
             "TEST_PATH",
-            dataset.get::<_, String>(database_settings.dataset_path_column.as_str())
+            dataset.get::<_, &str>(database_settings.dataset_path_column.as_str())
         );
         assert_eq!(
             "TEST_LANDING_PAGE",
-            dataset.get::<_, String>(database_settings.dataset_landing_page_column.as_str())
+            dataset.get::<_, &str>(database_settings.dataset_landing_page_column.as_str())
         );
         assert_eq!(
             "TEST_PROVIDER",
-            dataset.get::<_, String>(database_settings.dataset_provider_column.as_str())
+            dataset.get::<_, &str>(database_settings.dataset_provider_column.as_str())
         );
         assert_eq!(
             "FOOBAR",
-            dataset.get::<_, String>(Field::new("DS_TEXT").hash.as_str())
+            dataset.get::<_, &str>(Field::new("DS_TEXT").hash.as_str())
         );
         assert_eq!(
             42.0,
@@ -974,20 +1013,20 @@ mod tests {
 
         let unit_result = retrieve_rows(&mut database_sink, &database_settings.temp_unit_table);
 
-        let unit1 = unit_result.get(0);
+        let unit1 = unit_result.get(0).unwrap();
         assert_eq!(
             "FOO",
-            unit1.get::<_, String>(Field::new("UNIT_TEXT").hash.as_str())
+            unit1.get::<_, &str>(Field::new("UNIT_TEXT").hash.as_str())
         );
         assert_eq!(
             13.0,
             unit1.get::<_, f64>(Field::new("UNIT_NUM").hash.as_str())
         );
 
-        let unit2 = unit_result.get(1);
+        let unit2 = unit_result.get(1).unwrap();
         assert_eq!(
             "BAR",
-            unit2.get::<_, String>(Field::new("UNIT_TEXT").hash.as_str())
+            unit2.get::<_, &str>(Field::new("UNIT_TEXT").hash.as_str())
         );
         assert_eq!(
             37.0,
@@ -1079,11 +1118,11 @@ mod tests {
 
         assert_eq!(
             1,
-            number_of_entries(&database_sink, &database_settings.temp_dataset_table)
+            number_of_entries(&mut database_sink, &database_settings.temp_dataset_table)
         );
         assert_eq!(
             2,
-            number_of_entries(&database_sink, &database_settings.temp_unit_table)
+            number_of_entries(&mut database_sink, &database_settings.temp_unit_table)
         );
     }
 
@@ -1109,7 +1148,7 @@ mod tests {
 
         database_sink.migrate_schema().unwrap();
 
-        let tables = retrieve_ordered_table_names(&database_sink);
+        let tables = retrieve_ordered_table_names(&mut database_sink);
 
         assert_eq!(
             tables,
@@ -1180,92 +1219,96 @@ mod tests {
 
         database_sink.migrate_schema().unwrap();
 
-        retrieve_ordered_table_column_names(&database_sink, &database_settings.listing_view);
+        retrieve_ordered_table_column_names(&mut database_sink, &database_settings.listing_view);
 
-        let rows = database_sink
+        let statement = database_sink
             .connection
-            .query(
-                &format!(
-                    r#"SELECT * FROM pg_temp.{LISTING_VIEW}"#,
-                    LISTING_VIEW = database_settings.listing_view
-                ),
-                &[],
-            )
+            .prepare(&format!(
+                r#"SELECT * FROM pg_temp.{LISTING_VIEW}"#,
+                LISTING_VIEW = database_settings.listing_view
+            ))
             .unwrap();
+
+        let rows = database_sink.connection.query(&statement, &[]).unwrap();
 
         assert_eq!(rows.len(), 1);
 
-        let row = rows.iter().next().unwrap();
-        assert_eq!(row.get::<_, String>("dataset"), "FOOBAR");
-        assert_eq!(row.get::<_, String>("id"), "TEST_ID");
-        assert_eq!(row.get::<_, String>("link"), "TEST_LANDING_PAGE");
-        assert_eq!(row.get::<_, String>("provider"), "TEST_PROVIDER");
+        let row = rows.first().unwrap();
+        assert_eq!(row.get::<_, &str>("dataset"), "FOOBAR");
+        assert_eq!(row.get::<_, &str>("id"), "TEST_ID");
+        assert_eq!(row.get::<_, &str>("link"), "TEST_LANDING_PAGE");
+        assert_eq!(row.get::<_, &str>("provider"), "TEST_PROVIDER");
         assert!(row.get::<_, bool>("isGeoReferenced"));
     }
 
-    fn retrieve_rows(database_sink: &mut DatabaseSink, table_name: &str) -> Rows {
-        database_sink
+    fn retrieve_rows(database_sink: &mut DatabaseSink, table_name: &str) -> Vec<Row> {
+        let statement = database_sink
             .connection
-            .query(
-                &format!(r#"SELECT * FROM pg_temp.{TABLE}"#, TABLE = table_name,),
-                &[],
-            )
-            .unwrap()
+            .prepare(&format!(
+                r#"SELECT * FROM pg_temp.{TABLE}"#,
+                TABLE = table_name,
+            ))
+            .unwrap();
+
+        database_sink.connection.query(&statement, &[]).unwrap()
     }
 
-    fn number_of_entries(database_sink: &DatabaseSink, table_name: &str) -> i32 {
+    fn number_of_entries(database_sink: &mut DatabaseSink, table_name: &str) -> i32 {
+        let statement = database_sink
+            .connection
+            .prepare(&format!(
+                "select count(*)::integer as total from pg_temp.{}",
+                table_name
+            ))
+            .unwrap();
+
         database_sink
             .connection
-            .query(
-                &format!(
-                    "select count(*)::integer as total from pg_temp.{}",
-                    table_name
-                ),
-                &[],
-            )
+            .query(&statement, &[])
             .unwrap()
-            .get(0)
-            .get("total")
+            .first()
+            .unwrap()
+            .get::<_, i32>("total")
     }
 
     fn retrieve_translation_table_keys(
         database_settings: &DatabaseSettings,
-        database_sink: &DatabaseSink,
+        database_sink: &mut DatabaseSink,
     ) -> Vec<String> {
+        let statement = database_sink
+            .connection
+            .prepare(&format!(
+                "select name from pg_temp.{}_translation;",
+                database_settings.temp_dataset_table,
+            ))
+            .unwrap();
+
+        let rows = database_sink.connection.query(&statement, &[]).unwrap();
+
         sorted_vec(
-            database_sink
-                .connection
-                .query(
-                    &format!(
-                        "select name from pg_temp.{}_translation;",
-                        database_settings.temp_dataset_table,
-                    ),
-                    &[],
-                )
-                .unwrap()
-                .iter()
-                .map(|row| row.get("name"))
+            rows.iter()
+                .map(|row| row.get::<_, String>("name"))
                 .collect::<Vec<String>>(),
         )
     }
 
     fn retrieve_translation_table_values(
         database_settings: &DatabaseSettings,
-        database_sink: &DatabaseSink,
+        database_sink: &mut DatabaseSink,
     ) -> Vec<String> {
+        let statement = database_sink
+            .connection
+            .prepare(&format!(
+                "select hash from pg_temp.{}_translation;",
+                database_settings.temp_dataset_table,
+            ))
+            .unwrap();
+
+        let rows = database_sink.connection.query(&statement, &[]).unwrap();
+
         sorted_vec(
-            database_sink
-                .connection
-                .query(
-                    &format!(
-                        "select hash from pg_temp.{}_translation;",
-                        database_settings.temp_dataset_table,
-                    ),
-                    &[],
-                )
-                .unwrap()
-                .iter()
-                .map(|row| row.get("hash"))
+            rows.iter()
+                .map(|row| row.get::<_, String>("hash"))
                 .collect::<Vec<String>>(),
         )
     }
@@ -1278,7 +1321,7 @@ mod tests {
         vec
     }
 
-    fn retrieve_ordered_table_names(database_sink: &DatabaseSink) -> Vec<String> {
+    fn retrieve_ordered_table_names(database_sink: &mut DatabaseSink) -> Vec<String> {
         let mut tables = database_sink
             .connection
             .query(
@@ -1301,7 +1344,7 @@ mod tests {
     }
 
     fn retrieve_ordered_table_column_names(
-        database_sink: &DatabaseSink,
+        database_sink: &mut DatabaseSink,
         table_name: &str,
     ) -> Vec<String> {
         let mut tables = database_sink

@@ -60,16 +60,16 @@ impl PangaeaSearchResult {
             }
         });
 
-        reqwest::Client::new()
+        let response = reqwest::blocking::Client::new()
             .post(&format!(
                 "{url}?scroll={scroll_timeout}",
                 url = url,
                 scroll_timeout = Self::SCROLL_TIMEOUT,
             ))
             .json(&body)
-            .send()?
-            .json::<Self>()
-            .map_err(|e| e.into())
+            .send()?;
+
+        response.json::<Self>().map_err(Into::into)
     }
 
     fn from_scroll_url(url: &str, scroll_id: &str) -> Result<Self, Error> {
@@ -77,12 +77,12 @@ impl PangaeaSearchResult {
         body.insert("scroll", Self::SCROLL_TIMEOUT);
         body.insert("scroll_id", scroll_id);
 
-        reqwest::Client::new()
+        let response = reqwest::blocking::Client::new()
             .post(url)
             .json(&body)
-            .send()?
-            .json::<Self>()
-            .map_err(|e| e.into())
+            .send()?;
+
+        response.json::<Self>().map_err(Into::into)
     }
 
     pub fn retrieve_all_entries(

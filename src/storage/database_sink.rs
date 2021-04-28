@@ -865,6 +865,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn dataset_table_contains_entry_after_insert() {
         let database_settings = retrieve_settings_from_file_and_override_schema();
         let abcd_fields = create_abcd_fields_from_json(&json!([

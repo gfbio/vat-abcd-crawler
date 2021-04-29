@@ -1,7 +1,5 @@
 use failure::Error;
-use std::fs::File;
-use std::io::BufWriter;
-use std::path::Path;
+use std::{fs::File, path::Path};
 
 pub struct FileDownloader {
     url: String,
@@ -13,7 +11,7 @@ impl FileDownloader {
     }
 
     pub fn to_path(&self, path: &Path) -> Result<(), Error> {
-        let mut response = reqwest::get(&self.url)?;
+        let mut response = reqwest::blocking::get(&self.url)?;
 
         if !response.status().is_success() {
             return Err(failure::err_msg(format!(
@@ -22,10 +20,9 @@ impl FileDownloader {
             )));
         }
 
-        let output_file = File::create(&path)?;
+        let mut output_file = File::create(&path)?;
 
-        let mut writer = BufWriter::new(&output_file);
-        std::io::copy(&mut response, &mut writer)?;
+        response.copy_to(&mut output_file)?;
 
         Ok(())
     }

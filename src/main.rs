@@ -4,13 +4,14 @@ use std::path::Path;
 use clap::{crate_authors, crate_description, crate_version, App, Arg};
 use failure::Error;
 use log::{error, info, trace, warn};
+use pangaea::PangaeaSearchResult;
 use simplelog::{CombinedLogger, SharedLogger, TermLogger, WriteLogger};
 
 use settings::Settings;
 
 use crate::abcd::{AbcdFields, AbcdParser, ArchiveReader};
 use crate::file_downloader::FileDownloader;
-use crate::pangaea::{PangaeaSearchResult, PangaeaSearchResultEntry};
+use crate::pangaea::PangaeaSearchResultEntry;
 use crate::settings::TerminologyServiceSettings;
 use crate::storage::DatabaseSink;
 
@@ -63,7 +64,7 @@ fn main() -> Result<(), Error> {
 fn process_datasets(
     settings: &Settings,
     abcd_fields: &AbcdFields,
-    database_sink: &mut DatabaseSink,
+    database_sink: &mut DatabaseSink<'_>,
     datasets: &[PangaeaSearchResultEntry],
 ) -> Result<(), Error> {
     let temp_dir = tempfile::tempdir()?;
@@ -239,9 +240,14 @@ fn initialize_logger(file_path: &Path, settings: &Settings) -> Result<(), Error>
         simplelog::LevelFilter::Info
     };
 
-    if let Some(term_logger) = TermLogger::new(log_level, simplelog::Config::default()) {
-        loggers.push(term_logger);
-    }
+    let term_logger = TermLogger::new(
+        log_level,
+        simplelog::Config::default(),
+        simplelog::TerminalMode::default(),
+        simplelog::ColorChoice::Auto,
+    );
+
+    loggers.push(term_logger);
 
     if let Ok(file) = File::create(file_path) {
         loggers.push(WriteLogger::new(

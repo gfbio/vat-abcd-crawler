@@ -1,5 +1,5 @@
 use mockito::{mock, Matcher};
-use reqwest::Client;
+use reqwest::blocking::Client;
 use std::collections::HashMap;
 
 #[test]
@@ -10,7 +10,7 @@ fn mockito_expect_body() {
         .create();
 
     let client = Client::new();
-    let mut response = client
+    let response = client
         .post(&mockito::server_url())
         .body("FOOBAR")
         .send()
@@ -30,7 +30,7 @@ fn mockito_expect_json() {
         .create();
 
     let client = Client::new();
-    let mut response = client
+    let response = client
         .post(&mockito::server_url())
         .body(JSON_STRING)
         .send()
@@ -51,7 +51,7 @@ fn mockito_expect_json_from_map() {
     map.insert("foo", "bar");
 
     let client = Client::new();
-    let mut response = client
+    let response = client
         .post(&mockito::server_url())
         .json(&map)
         .send()

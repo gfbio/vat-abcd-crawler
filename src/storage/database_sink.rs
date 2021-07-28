@@ -154,6 +154,8 @@ impl<'s> DatabaseSink<'s> {
             ));
         }
 
+        fields.push("geom geometry(Point)".to_owned());
+
         let statement = self.connection.prepare(&format!(
             "CREATE TABLE {schema}.{table} ( {fields} );",
             schema = &self.database_settings.schema,
@@ -429,6 +431,16 @@ impl<'s> DatabaseSink<'s> {
         let unit_index_statement = self.connection.prepare(&unit_index_statement)?;
         self.connection.execute(&unit_index_statement, &[])?;
 
+        let geom_index_statement = format!(
+            "CREATE INDEX {unit_table}_geom_idx ON {schema}.{unit_table} \
+             USING GIST (geom);",
+            schema = &self.database_settings.schema,
+            unit_table = &self.database_settings.temp_unit_table,
+        );
+        debug!("{}", &geom_index_statement);
+        let geom_index_statement = self.connection.prepare(&geom_index_statement)?;
+        self.connection.execute(&geom_index_statement, &[])?;
+
         let cluster_statement = format!(
             "CLUSTER {unit_table}_idx ON {schema}.{unit_table};",
             schema = &self.database_settings.schema,
@@ -613,6 +625,7 @@ impl<'s> DatabaseSink<'s> {
     fn insert_units(&mut self, abcd_data: &AbcdResult, id: u32) -> Result<(), Error> {
         let mut columns: Vec<String> = vec![self.database_settings.surrogate_key_column.clone()];
         columns.extend(self.unit_fields.iter().map(|field| field.hash.clone()));
+        columns.push("geom".to_owned());
 
         let mut values = WriterBuilder::new()
             .terminator(csv::Terminator::Any(b'\n'))
@@ -626,12 +639,26 @@ impl<'s> DatabaseSink<'s> {
         for unit_data in &abcd_data.units {
             values.write_field(&id.to_string())?; // put id first
 
+            let mut lon = None;
+            let mut lat = None;
             for field in &self.unit_fields {
                 if let Some(value) = unit_data.get(&field.name) {
                     values.write_field(value.to_string())?;
+
+                    if field.name == "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal" {
+                        lon = Some(value);
+                    } else if field.name == "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal" {
+                        lat = Some(value);
+                    }
                 } else {
                     values.write_field("")?;
                 }
+            }
+
+            if let (Some(lon), Some(lat)) = (lon, lat) {
+                values.write_field(format!("POINT({} {})", lon, lat))?;
+            } else {
+                values.write_field("")?;
             }
 
             values.write_record(None::<&[u8]>)?; // terminate record

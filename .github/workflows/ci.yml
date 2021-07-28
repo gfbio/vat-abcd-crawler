@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ${{matrix.os}}
+
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_USER: gfbio
+          POSTGRES_PASSWORD: gfbio
+          POSTGRES_DB: gfbio
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+    strategy:
+      matrix:
+        os:
+          - ubuntu-20.04
+        # features: ["", "--all-features"]
+        build: ["", "--release"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Check with Rustfmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+      - name: Check with Clippy
+        uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-targets ${{ matrix.features }} -- -D warnings
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: ${{ matrix.features }} ${{ matrix.build }} --verbose
+      - name: Setup database config
+        run: |
+          touch settings.toml
+          echo '[database]' >> settings.toml
+          echo 'database = "gfbio"' >> settings.toml
+          echo 'tls = false' >> settings.toml
+          echo 'user = "gfbio"' >> settings.toml
+          echo 'password = "gfbio"' >> settings.toml
+      - name: Run tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: ${{ matrix.features }} --verbose

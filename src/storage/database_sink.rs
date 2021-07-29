@@ -127,7 +127,7 @@ impl<'s> DatabaseSink<'s> {
     /// Create the temporary unit table
     fn create_temporary_unit_table(&mut self, abcd_fields: &AbcdFields) -> Result<(), Error> {
         let mut fields = vec![format!(
-            "{} int not null",
+            "{} int not null, geom geometry(Point)",
             self.database_settings.surrogate_key_column,
         )];
 
@@ -153,8 +153,6 @@ impl<'s> DatabaseSink<'s> {
                 nullable = null_string,
             ));
         }
-
-        fields.push("geom geometry(Point)".to_owned());
 
         let statement = self.connection.prepare(&format!(
             "CREATE TABLE {schema}.{table} ( {fields} );",
@@ -433,7 +431,7 @@ impl<'s> DatabaseSink<'s> {
 
         let geom_index_statement = format!(
             "CREATE INDEX {unit_table}_geom_idx ON {schema}.{unit_table} \
-             USING GIST (geom);",
+             USING SPGIST (geom);",
             schema = &self.database_settings.schema,
             unit_table = &self.database_settings.temp_unit_table,
         );
@@ -825,6 +823,7 @@ mod tests {
             .iter()
             .map(|field| field.hash.clone())
             .chain(vec![database_settings.surrogate_key_column.clone()])
+            .chain(vec!["geom".to_owned()])
             .collect::<Vec<_>>();
 
         assert!(!unit_columns.is_empty());

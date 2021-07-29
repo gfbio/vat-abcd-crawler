@@ -126,10 +126,13 @@ impl<'s> DatabaseSink<'s> {
 
     /// Create the temporary unit table
     fn create_temporary_unit_table(&mut self, abcd_fields: &AbcdFields) -> Result<(), Error> {
-        let mut fields = vec![format!(
-            "{} int not null, geom geometry(Point)",
-            self.database_settings.surrogate_key_column,
-        )];
+        let mut fields = vec![
+            format!(
+                "{} int not null",
+                self.database_settings.surrogate_key_column,
+            ),
+            "geom geometry(Point)".to_owned(),
+        ];
 
         for field in &self.unit_fields {
             let abcd_field = abcd_fields

@@ -1,6 +1,6 @@
 # VAT ABCD Crawler
 
-[![Build Status](https://travis-ci.org/gfbio/vat-abcd-crawler.svg?branch=master)](https://travis-ci.org/gfbio/vat-abcd-crawler)
+![CI](https://github.com/gfbio/vat-abcd-crawler/workflows/CI/badge.svg)
 
 This repository contains the ABCD crawler for the VAT system.
 It retrieves archive information from the BMS and parses its ABCD archives one by one.

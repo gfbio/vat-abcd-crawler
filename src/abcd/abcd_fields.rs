@@ -83,10 +83,10 @@ mod tests {
             .value_of(&b"/DataSets/DataSet/DatasetGUID".to_vec())
             .expect("Field not found");
         assert_eq!(field1.name, "/DataSets/DataSet/DatasetGUID");
-        assert_eq!(field1.numeric, false);
-        assert_eq!(field1.vat_mandatory, false);
-        assert_eq!(field1.gfbio_mandatory, false);
-        assert_eq!(field1.global_field, true);
+        assert!(!field1.numeric);
+        assert!(!field1.vat_mandatory);
+        assert!(!field1.gfbio_mandatory);
+        assert!(field1.global_field);
         assert!(field1.unit.is_empty());
 
         let field2 = abcd_fields
@@ -96,10 +96,10 @@ mod tests {
             field2.name,
             "/DataSets/DataSet/Units/Unit/SourceInstitutionID"
         );
-        assert_eq!(field2.numeric, false);
-        assert_eq!(field2.vat_mandatory, true);
-        assert_eq!(field2.gfbio_mandatory, true);
-        assert_eq!(field2.global_field, false);
+        assert!(!field2.numeric);
+        assert!(field2.vat_mandatory);
+        assert!(field2.gfbio_mandatory);
+        assert!(!field2.global_field);
         assert_eq!(field2.unit, "TEST");
     }
 

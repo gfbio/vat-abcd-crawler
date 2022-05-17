@@ -26,3 +26,21 @@ In order to post log files to slack, create a `.env` file with the following con
 slack_channel = vat_status
 slack_webhook_url = https://hooks.slack.com/services/<YOURWEBHOOKKEYHERE>
 ```
+
+## Process single file
+
+```bash
+# CSV from ABCD
+
+touch settings.toml
+echo '[abcd]' >> settings.toml
+echo 'fields_file = "abcd-fields-stripped.json"' >> settings.toml
+
+cargo run -- --file-to-csv /path/to/file.zip > out.csv
+
+# CSV to GPKG
+
+chmod +x csv-to-gpkg.sh
+
+./csv-to-gpkg.sh
+```

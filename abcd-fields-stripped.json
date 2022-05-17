@@ -1,0 +1,34 @@
+[
+  {
+    "name": "/DataSets/DataSet/Units/Unit/Identifications/Identification/Result/TaxonIdentified/ScientificName/FullScientificNameString",
+    "numeric": false,
+    "vatMandatory": false,
+    "gfbioMandatory": true,
+    "globalField": false,
+    "unit": ""
+  },
+  {
+    "name": "/DataSets/DataSet/Units/Unit/Gathering/DateTime/ISODateTimeBegin",
+    "numeric": false,
+    "vatMandatory": false,
+    "gfbioMandatory": true,
+    "globalField": false,
+    "unit": ""
+  },
+  {
+    "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LongitudeDecimal",
+    "numeric": true,
+    "vatMandatory": true,
+    "gfbioMandatory": true,
+    "globalField": false,
+    "unit": "°"
+  },
+  {
+    "name": "/DataSets/DataSet/Units/Unit/Gathering/SiteCoordinateSets/SiteCoordinates/CoordinatesLatLong/LatitudeDecimal",
+    "numeric": true,
+    "vatMandatory": true,
+    "gfbioMandatory": true,
+    "globalField": false,
+    "unit": "°"
+  }
+]

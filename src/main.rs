@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{crate_authors, crate_description, crate_version, App, Arg};
 use failure::Error;
@@ -14,6 +14,7 @@ use crate::file_downloader::FileDownloader;
 use crate::pangaea::PangaeaSearchResultEntry;
 use crate::settings::TerminologyServiceSettings;
 use crate::storage::DatabaseSink;
+use crate::vat_type::VatType;
 
 mod abcd;
 mod file_downloader;
@@ -24,8 +25,14 @@ mod storage;
 mod test_utils;
 mod vat_type;
 
+#[derive(Debug)]
+pub enum Cmd {
+    All,
+    FileToCsv(PathBuf),
+}
+
 fn main() -> Result<(), Error> {
-    let settings = initialize_settings().expect("Unable to load settings file.");
+    let (cmd, settings) = initialize_settings().expect("Unable to load settings file.");
 
     initialize_logger(Path::new(&settings.general.log_file), &settings)
         .expect("Unable to initialize logger.");
@@ -38,7 +45,77 @@ fn main() -> Result<(), Error> {
         }
     };
 
-    let mut database_sink = match DatabaseSink::new(&settings.database, &abcd_fields) {
+    match cmd {
+        Cmd::All => main_all(&settings, &abcd_fields),
+        Cmd::FileToCsv(file) => main_single_file(&settings, &abcd_fields, &file),
+    }
+}
+
+fn main_single_file(
+    settings: &Settings,
+    abcd_fields: &AbcdFields,
+    file: &Path,
+) -> Result<(), Error> {
+    let mut archive_reader = ArchiveReader::from_path(file)?;
+
+    let mut abcd_parser = AbcdParser::new(&settings.abcd, abcd_fields);
+
+    let mut writer = csv::WriterBuilder::new()
+        .delimiter(b',')
+        .has_headers(true)
+        .from_writer(std::io::stdout());
+
+    // header
+    let field_names: Vec<&str> = abcd_fields
+        .into_iter()
+        .map(|field| field.name.as_str())
+        .collect();
+    writer.write_record(&field_names)?;
+
+    for xml_bytes_result in archive_reader.bytes_iter() {
+        let xml_bytes = match xml_bytes_result {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                warn!("Unable to read file from zip archive: {}", e);
+                continue;
+            }
+        };
+
+        let abcd_data = match abcd_parser.parse("", &file.to_string_lossy(), "", "", &xml_bytes) {
+            Ok(data) => data,
+            Err(e) => {
+                warn!("Unable to retrieve ABCD data: {}", e);
+                continue;
+            }
+        };
+
+        trace!("{:?}", abcd_data.dataset);
+
+        for row in abcd_data.units {
+            for field in abcd_fields {
+                match row.get(&field.name) {
+                    Some(VatType::Textual(value)) => {
+                        writer.write_field(value)?;
+                    }
+                    Some(VatType::Numeric(value)) => {
+                        writer.write_field(value.to_string())?;
+                    }
+                    None => {
+                        writer.write_field(&[])?;
+                    }
+                }
+            }
+
+            // finish line
+            writer.write_record(None::<&[u8]>)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn main_all(settings: &Settings, abcd_fields: &AbcdFields) -> Result<(), Error> {
+    let mut database_sink = match DatabaseSink::new(&settings.database, abcd_fields) {
         Ok(sink) => sink,
         Err(e) => {
             error!("Unable to create storage sink: {}", e);
@@ -54,7 +131,7 @@ fn main() -> Result<(), Error> {
         }
     };
 
-    if let Err(e) = process_datasets(&settings, &abcd_fields, &mut database_sink, &datasets) {
+    if let Err(e) = process_datasets(settings, abcd_fields, &mut database_sink, &datasets) {
         error!("Error processing datasets: {}", e);
     };
 
@@ -72,7 +149,7 @@ fn process_datasets(
 
     create_or_check_for_directory(&storage_dir);
 
-    let mut abcd_parser = AbcdParser::new(&settings.abcd, &abcd_fields);
+    let mut abcd_parser = AbcdParser::new(&settings.abcd, abcd_fields);
 
     for dataset in datasets
         .iter()
@@ -160,7 +237,7 @@ fn process_datasets(
                 dataset.id(),
                 dataset.download_url(),
                 &landing_page_url,
-                &dataset.publisher(),
+                dataset.publisher(),
                 &xml_bytes,
             ) {
                 Ok(data) => data,
@@ -208,7 +285,7 @@ fn create_or_check_for_directory(storage_dir: &&Path) {
     }
 }
 
-fn initialize_settings() -> Result<Settings, Error> {
+fn initialize_settings() -> Result<(Cmd, Settings), Error> {
     let matches = App::new("VAT ABCD Crawler")
         .version(crate_version!())
         .author(crate_authors!())
@@ -223,11 +300,25 @@ fn initialize_settings() -> Result<Settings, Error> {
                 .required(false)
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("file-to-csv")
+                .long("file-to-csv")
+                .value_name("FILE_TO_CSV")
+                .help("Specify a single file archive (zipped ABCD XMLs) that is converted to CSV")
+                .required(false)
+                .takes_value(true),
+        )
         .get_matches();
+
+    let cmd = if let Some(file) = matches.value_of("file-to-csv") {
+        Cmd::FileToCsv(PathBuf::from(file))
+    } else {
+        Cmd::All
+    };
 
     let settings_path = matches.value_of("settings").map(Path::new);
 
-    Ok(Settings::new(settings_path)?)
+    Ok((cmd, Settings::new(settings_path)?))
 }
 
 /// Initialize the logger.

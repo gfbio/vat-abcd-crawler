@@ -43,4 +43,8 @@ cargo run -- --file-to-csv /path/to/file.zip > out.csv
 chmod +x csv-to-gpkg.sh
 
 ./csv-to-gpkg.sh
+
+# Additional indexes
+
+sqlite3 output.gpkg "CREATE INDEX IF NOT EXISTS idx_fields ON out (Date, Species);"
 ```

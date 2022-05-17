@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use clap::{crate_authors, crate_description, crate_version, App, Arg};
+use clap::{crate_authors, crate_description, crate_version, Arg, Command};
 use failure::Error;
 use log::{error, info, trace, warn};
 use pangaea::PangaeaSearchResult;
@@ -286,14 +286,13 @@ fn create_or_check_for_directory(storage_dir: &&Path) {
 }
 
 fn initialize_settings() -> Result<(Cmd, Settings), Error> {
-    let matches = App::new("VAT ABCD Crawler")
+    let matches = Command::new("VAT ABCD Crawler")
         .version(crate_version!())
         .author(crate_authors!())
         .about(crate_description!())
         .arg(
-            Arg::with_name("settings")
-                .index(1)
-                .short("s")
+            Arg::new("settings")
+                .short('s')
                 .long("settings")
                 .value_name("SETTINGS")
                 .help("Specify the settings file")
@@ -301,7 +300,7 @@ fn initialize_settings() -> Result<(Cmd, Settings), Error> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("file-to-csv")
+            Arg::new("file-to-csv")
                 .long("file-to-csv")
                 .value_name("FILE_TO_CSV")
                 .help("Specify a single file archive (zipped ABCD XMLs) that is converted to CSV")

@@ -52,6 +52,10 @@ impl AbcdFields {
     pub fn len(&self) -> usize {
         self.fields.len()
     }
+
+    pub fn keys(&self) -> std::collections::hash_map::Keys<'_, Vec<u8>, AbcdField> {
+        self.fields.keys()
+    }
 }
 
 impl<'a> IntoIterator for &'a AbcdFields {
@@ -80,7 +84,7 @@ mod tests {
         assert_eq!(abcd_fields.len(), 2);
 
         let field1 = abcd_fields
-            .value_of(&b"/DataSets/DataSet/DatasetGUID".to_vec())
+            .value_of(b"/DataSets/DataSet/DatasetGUID")
             .expect("Field not found");
         assert_eq!(field1.name, "/DataSets/DataSet/DatasetGUID");
         assert!(!field1.numeric);
@@ -90,7 +94,7 @@ mod tests {
         assert!(field1.unit.is_empty());
 
         let field2 = abcd_fields
-            .value_of(&b"/DataSets/DataSet/Units/Unit/SourceInstitutionID".to_vec())
+            .value_of(b"/DataSets/DataSet/Units/Unit/SourceInstitutionID")
             .expect("Field not found");
         assert_eq!(
             field2.name,

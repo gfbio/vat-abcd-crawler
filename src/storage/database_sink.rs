@@ -30,7 +30,7 @@ impl<'s> DatabaseSink<'s> {
         database_settings: &'s settings::DatabaseSettings,
         abcd_fields: &AbcdFields,
     ) -> Result<Self, Error> {
-        let connection = <DatabaseSink<'s>>::create_database_connection(&database_settings)?;
+        let connection = <DatabaseSink<'s>>::create_database_connection(database_settings)?;
 
         let (dataset_fields, unit_fields) =
             <DatabaseSink<'s>>::create_lists_of_dataset_and_unit_fields(abcd_fields);
@@ -546,16 +546,16 @@ impl<'s> DatabaseSink<'s> {
         match self.surrogate_key.for_id(&abcd_data.dataset_id) {
             SurrogateKeyType::New(surrogate_key) => {
                 Self::insert_dataset_metadata(
-                    &self.database_settings,
+                    self.database_settings,
                     &mut self.connection,
                     self.dataset_fields.as_slice(),
                     abcd_data,
                     surrogate_key,
                 )?;
-                self.insert_units(&abcd_data, surrogate_key)?;
+                self.insert_units(abcd_data, surrogate_key)?;
             }
             SurrogateKeyType::Existing(surrogate_key) => {
-                self.insert_units(&abcd_data, surrogate_key)?;
+                self.insert_units(abcd_data, surrogate_key)?;
             }
         }
 

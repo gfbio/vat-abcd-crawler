@@ -1,8 +1,10 @@
 use std::path::Path;
 
-use config::Config;
+use config::builder::DefaultState;
+use config::ConfigBuilder;
 use config::ConfigError;
 use config::File;
+use config::FileFormat;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -70,14 +72,16 @@ pub struct Settings {
 
 impl Settings {
     pub fn new(path: Option<&Path>) -> Result<Self, ConfigError> {
-        let mut s = Config::new();
-        s.merge(File::from(Path::new("settings-default.toml")))?;
-        s.merge(File::from(Path::new("settings.toml")))?;
+        let mut s = ConfigBuilder::<DefaultState>::default();
+        s = s.add_source(File::new("settings-default.toml", FileFormat::Toml));
+        s = s.add_source(File::new("settings.toml", FileFormat::Toml));
         if let Some(path) = path {
-            s.merge(File::from(path))?;
+            s = s.add_source(File::from(path));
         }
 
-        s.try_into()
+        let config = s.build()?;
+
+        config.try_deserialize()
     }
 }
 

@@ -371,7 +371,6 @@ impl<'s> DatabaseSink<'s> {
                 table = &database_settings.dataset_table,
                 temp_table = &database_settings.temp_dataset_table,
             ),
-
             // foreign key
             format!(
                 "ALTER TABLE {schema}.{table} \

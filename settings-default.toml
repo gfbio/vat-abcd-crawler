@@ -12,8 +12,8 @@ landing_page_field = "/DataSets/DataSet/Metadata/Description/Representation/URI"
 storage_dir = "raw_data"
 
 [pangaea]
-search_url = "https://ws.pangaea.de/es/dataportal-gfbio/pansimple/_search"
-scroll_url = "https://ws.pangaea.de/es/_search/scroll"
+search_url = "https://elasticsearch.gfbio.dev/dataportal-gfbio/_search"
+scroll_url = "https://elasticsearch.gfbio.dev/_search/scroll"
 
 [terminology_service]
 landingpage_url = "https://terminologies.gfbio.org/tools/landingpages/landingpage.php"

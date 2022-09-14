@@ -1,13 +1,13 @@
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SurrogateKey {
     id_to_key: HashMap<String, u32>,
     next_key: u32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum SurrogateKeyType {
     New(u32),
     Existing(u32),

@@ -362,6 +362,15 @@ impl<'s> DatabaseSink<'s> {
         transaction: &mut Transaction,
     ) -> Result<(), Error> {
         for statement in &[
+            // primary key
+            // foreign key
+            format!(
+                "ALTER TABLE {schema}.{table} \
+                 RENAME CONSTRAINT {temp_table}_pkey TO {table}_pkey;",
+                schema = &database_settings.schema,
+                table = &database_settings.dataset_table,
+                temp_table = &database_settings.temp_dataset_table,
+            ),
             // foreign key
             format!(
                 "ALTER TABLE {schema}.{table} \
@@ -376,6 +385,13 @@ impl<'s> DatabaseSink<'s> {
             // index
             format!(
                 "ALTER INDEX {schema}.{temp_index}_idx RENAME TO {index}_idx;",
+                schema = &database_settings.schema,
+                temp_index = &database_settings.temp_unit_table,
+                index = &database_settings.unit_table
+            ),
+            // geom index
+            format!(
+                "ALTER INDEX {schema}.{temp_index}_geom_idx RENAME TO {index}_geom_idx;",
                 schema = &database_settings.schema,
                 temp_index = &database_settings.temp_unit_table,
                 index = &database_settings.unit_table
